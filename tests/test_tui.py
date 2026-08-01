@@ -240,3 +240,69 @@ async def test_interval_callbacks_survive_an_unmounted_tree(tmp_path):
     app.log_line("still fine")
     app.refresh_command()
     assert app.selected_job() is None
+
+
+# -- Select blank handling ----------------------------------------------------
+
+
+async def test_clearing_the_preset_picker_is_a_safe_no_op(tmp_path):
+    """Clearing back to "--" must not revert settings or raise."""
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        picker = app.query_one("#preset-select", Select)
+        picker.value = "audio"
+        await pilot.pause()
+        assert app.cfg.mode == "audio"
+
+        picker.clear()  # what the UI does when the user selects "--"
+        await pilot.pause()
+        assert app.cfg.mode == "audio"  # settings survive
+
+
+async def test_clearing_the_preset_after_manual_edits_keeps_them(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.query_one("#preset-select", Select).value = "mobile"
+        await pilot.pause()
+        app.query_one(f"#{widget_id('video_quality')}", Select).value = "480"
+        await pilot.pause()
+
+        app.query_one("#preset-select", Select).clear()
+        await pilot.pause()
+        assert app.cfg.video_quality == "480"
+
+
+async def test_is_blank_matches_the_real_sentinel_not_the_bool():
+    """Textual 8: Select.NULL is the sentinel; Select.BLANK is the bool False."""
+    from ytkit.tui.app import is_blank
+
+    assert is_blank(Select.NULL) is True
+    assert is_blank(False) is False  # the trap — a Switch turned off
+    assert is_blank(None) is False
+    assert is_blank("audio") is False
+
+
+async def test_switch_can_be_turned_off(tmp_path):
+    """Guarding with `is Select.BLANK` swallowed every switch-off, since
+    Select.BLANK is the bool False."""
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        switch = app.query_one(f"#{widget_id('subtitles')}", Switch)
+        assert app.cfg.subtitles is True
+        switch.value = False
+        await pilot.pause()
+        assert app.cfg.subtitles is False
+        assert "--write-subs" not in str(app.query_one("#command-view", Static).content)
+
+
+async def test_every_boolean_setting_can_be_toggled_off(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        enabled = [n for n, f in Config.spec()
+                   if f.metadata["kind"] == "bool" and getattr(app.cfg, n)]
+        assert enabled, "expected some booleans on by default"
+        for name in enabled:
+            app.query_one(f"#{widget_id(name)}", Switch).value = False
+        await pilot.pause()
+        still_on = [n for n in enabled if getattr(app.cfg, n)]
+        assert not still_on, f"could not turn off: {still_on}"

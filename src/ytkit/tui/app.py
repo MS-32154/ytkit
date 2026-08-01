@@ -30,6 +30,7 @@ from textual.widgets import (
     TabPane,
 )
 from textual.widgets._data_table import ColumnKey
+from textual.widgets.select import NoSelection
 
 from ..argv import build_command
 from ..config import Config
@@ -65,6 +66,16 @@ COLUMNS: tuple[tuple[str, str, int], ...] = (
 FIXED_WIDTH = sum(w for key, _, w in COLUMNS if key != "title")
 CELL_PADDING = 2 * len(COLUMNS)  # DataTable pads one space either side
 MIN_TITLE, MAX_TITLE = 18, 70
+
+
+def is_blank(value: object) -> bool:
+    """True when a Select is showing its empty state.
+
+    Not `value is Select.BLANK`: in Textual 8 that attribute is the bool
+    False, while the actual sentinel is a NoSelection instance (Select.NULL),
+    so the identity check silently never matched.
+    """
+    return isinstance(value, NoSelection)
 
 
 def bar(percent: float, width: int = 12) -> Text:
@@ -314,9 +325,11 @@ class YtkitApp(App[None]):
 
     @on(Select.Changed, "#preset-select")
     def _preset_changed(self, event: Select.Changed) -> None:
-        if event.value is Select.BLANK:
+        # Clearing the picker back to "--" is a no-op: it must not revert
+        # settings the user has since tuned by hand.
+        preset = BY_KEY.get(str(event.value)) if not is_blank(event.value) else None
+        if preset is None:
             return
-        preset = BY_KEY[str(event.value)]
         self.cfg = preset.apply(self.cfg)
         panel = self.query_one("#settings-panel", SettingsPanel)
         panel.cfg = self.cfg
@@ -335,7 +348,7 @@ class YtkitApp(App[None]):
         if not widget_id or not widget_id.startswith("f-"):
             return
         value = event.value
-        if value is Select.BLANK:
+        if is_blank(value):
             return
         panel = self.query_one("#settings-panel", SettingsPanel)
         if panel.apply_change(widget_id, value):
