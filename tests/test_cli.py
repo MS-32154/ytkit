@@ -4,6 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from ytkit.cli import app
+from ytkit.config import Config
 
 runner = CliRunner()
 
@@ -194,3 +195,35 @@ def test_bracketed_filenames_survive_rich_markup(tmp_path):
     result = run("convert", str(caption))
     assert result.exit_code == 0
     assert "[dQw4w9WgXcQ]" in result.output
+
+
+# -- entry points -------------------------------------------------------------
+
+
+def test_bare_invocation_launches_the_tui(monkeypatch):
+    """`ytkit` with no arguments is the primary entry point."""
+    import ytkit.tui.app as tui_app
+
+    captured = {}
+    monkeypatch.setattr(tui_app, "run", lambda cfg, urls: captured.update(cfg=cfg, urls=urls))
+    result = run()
+    assert result.exit_code == 0, result.output
+    assert isinstance(captured["cfg"], Config)
+    assert captured["urls"] == []
+
+
+def test_tui_subcommand_passes_urls_and_preset(monkeypatch):
+    import ytkit.tui.app as tui_app
+
+    captured = {}
+    monkeypatch.setattr(tui_app, "run", lambda cfg, urls: captured.update(cfg=cfg, urls=urls))
+    result = run("tui", URL, "--preset", "audio")
+    assert result.exit_code == 0, result.output
+    assert captured["urls"] == [URL]
+    assert captured["cfg"].mode == "audio"
+
+
+def test_tui_subcommand_reports_a_missing_profile(monkeypatch, tmp_path):
+    monkeypatch.setattr("ytkit.storage.PROFILE_DIR", tmp_path)
+    result = run("tui", "--profile", "ghost")
+    assert result.exit_code != 0

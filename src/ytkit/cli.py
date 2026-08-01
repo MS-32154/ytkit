@@ -87,7 +87,20 @@ def main(
         console.print(f"ytkit {__version__}")
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
-        ctx.invoke(tui)
+        # Not ctx.invoke(tui): Click would pass Typer's OptionInfo sentinels
+        # through as the parameter values instead of resolving the defaults.
+        _launch_tui()
+
+
+def _launch_tui(
+    urls: list[str] | None = None,
+    config_file: Path | None = None,
+    profile: str | None = None,
+    preset: str | None = None,
+) -> None:
+    from .tui.app import run
+
+    run(_base_config(config_file, profile, preset), list(urls or []))
 
 
 @app.command()
@@ -98,9 +111,7 @@ def tui(
     preset: str | None = typer.Option(None, "--preset", "-p", help="Preset to start from."),
 ) -> None:
     """Launch the full-screen terminal UI."""
-    from .tui.app import run
-
-    run(_base_config(config_file, profile, preset), list(urls or []))
+    _launch_tui(urls, config_file, profile, preset)
 
 
 @app.command()

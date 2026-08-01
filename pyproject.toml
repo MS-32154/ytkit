@@ -7,13 +7,12 @@ authors = [
     { name = "MS-32154", email = "58910473+MS-32154@users.noreply.github.com" }
 ]
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
 keywords = ["youtube", "yt-dlp", "tui", "transcript", "subtitles", "metadata", "downloader"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
     "Topic :: Multimedia :: Video",
     "Topic :: Utilities",
@@ -45,6 +44,10 @@ dev = [
 [build-system]
 requires = ["uv_build>=0.11.26,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+# Cache and project live on different filesystems here; hardlinking would warn.
+link-mode = "copy"
 
 [tool.uv.build-backend]
 module-name = "ytkit"
