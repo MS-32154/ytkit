@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .romanise import original
 from .transcripts import hhmmss
 
 
@@ -26,13 +27,24 @@ def _count(value: Any) -> str:
 
 def summarise(info: dict[str, Any]) -> str:
     """Render a compact Markdown record of a single video."""
-    title = info.get("title") or info.get("id") or "Untitled"
+    # Prefer the pre-romanisation title: the sidecar is where the real,
+    # searchable name has to survive when the filename has been transliterated.
+    title = original(info, "title") or info.get("title") or info.get("id") or "Untitled"
     lines: list[str] = [f"# {title}", ""]
+    if original(info, "title"):
+        lines += [f"_Filename uses:_ `{info.get('title', '')}`", ""]
 
     facts: list[tuple[str, str]] = [
         ("URL", info.get("webpage_url") or info.get("original_url") or "—"),
         ("Video ID", info.get("id") or "—"),
-        ("Channel", info.get("uploader") or info.get("channel") or "—"),
+        (
+            "Channel",
+            original(info, "uploader")
+            or original(info, "channel")
+            or info.get("uploader")
+            or info.get("channel")
+            or "—",
+        ),
         ("Channel URL", info.get("uploader_url") or info.get("channel_url") or "—"),
         ("Uploaded", _date(info.get("upload_date"))),
         (

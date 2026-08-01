@@ -119,11 +119,22 @@ class Config:
         kind="path",
         help="File recording completed IDs so they are never fetched twice.",
     )
+    romanise_filenames: bool = opt(
+        False,
+        label="Romanise non-Latin names",
+        section=OUTPUT,
+        kind="bool",
+        help="Transliterate Arabic/Cyrillic/CJK titles and channel names into "
+             "Latin so they are navigable in a terminal. The originals are kept "
+             "in the .summary.md and .info.json sidecars.",
+    )
     restrict_filenames: bool = opt(
         False,
         label="Restrict filenames to ASCII",
         section=OUTPUT,
         kind="bool",
+        help="yt-dlp's own stripping. On its own it erases non-Latin titles "
+             "entirely — pair it with romanising, not instead of it.",
     )
     windows_filenames: bool = opt(
         False,

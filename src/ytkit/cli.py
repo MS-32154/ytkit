@@ -134,6 +134,7 @@ def get(
     thumbnail: bool | None = typer.Option(None, "--thumbnail/--no-thumbnail", help="Write the thumbnail."),
     info_json: bool | None = typer.Option(None, "--info-json/--no-info-json", help="Write the .info.json."),
     comments: bool | None = typer.Option(None, "--comments/--no-comments", help="Download comments."),
+    romanise: bool | None = typer.Option(None, "--romanise/--no-romanise", help="Transliterate non-Latin titles and channel names into Latin filenames."),
     sponsorblock: bool = typer.Option(False, "--sponsorblock", help="Remove sponsor and self-promo segments."),
     archive: Path | None = typer.Option(None, "--archive", help="Download-archive file."),
     items: str | None = typer.Option(None, "--items", "-I", help="Playlist items, e.g. 1-5,8."),
@@ -169,6 +170,7 @@ def get(
     _flag(cfg, "parallel_jobs", jobs)
     _flag(cfg, "cookies_from_browser", cookies_browser)
     _flag(cfg, "cookies_file", str(cookies) if cookies else None)
+    _flag(cfg, "romanise_filenames", romanise)
     if langs:
         cfg.sub_langs = [p.strip() for p in langs.split(",") if p.strip()]
     if sponsorblock:

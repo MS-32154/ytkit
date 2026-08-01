@@ -22,6 +22,7 @@ from yt_dlp.utils import (
     RejectedVideoReached,
 )
 
+from . import romanise as romanise_mod
 from . import transcripts
 from .argv import build_argv
 from .config import Config
@@ -159,6 +160,17 @@ def probe(url: str, cfg: Config, *, process: bool = False) -> dict[str, Any]:
         return ydl.sanitize_info(ydl.extract_info(url, download=False, process=process))
 
 
+class _RomanisePP(PostProcessor):
+    """Rewrites path-forming fields before yt-dlp computes any filename.
+
+    Must run at ``pre_process``: by the time the download starts, the output
+    template has already been rendered.
+    """
+
+    def run(self, info: dict[str, Any]) -> tuple[list, dict[str, Any]]:
+        return [], romanise_mod.romanise_info(info)
+
+
 class _SidecarPP(PostProcessor):
     """Writes ytkit's sidecars for each entry the moment yt-dlp finishes it.
 
@@ -286,6 +298,8 @@ class Engine:
             with self._make_ydl(opts) as ydl:
                 # Sidecars are written per entry, as soon as yt-dlp finishes it,
                 # so a playlist that stops early still keeps what it completed.
+                if cfg.romanise_filenames:
+                    ydl.add_post_processor(_RomanisePP(), when="pre_process")
                 ydl.add_post_processor(_SidecarPP(self, job), when="after_video")
                 try:
                     info = ydl.extract_info(job.url, download=True)

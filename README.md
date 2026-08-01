@@ -143,6 +143,42 @@ word by word), strips timing and styling, and reflows the result into
 paragraphs broken on natural pauses. Use `--timestamps` for `[hh:mm:ss]`
 prefixed lines instead.
 
+## Non-Latin titles
+
+Arabic, Cyrillic, CJK and other non-Latin titles make terminal navigation
+painful — right-to-left text is reordered for display by the Unicode bidi
+algorithm, so what `ls` shows doesn't match the byte order you have to type,
+and tab-completion stops being useful. The channel name is usually non-Latin
+too, so the *directory* is affected as well.
+
+```bash
+ytkit get URL --romanise -s restrict_filenames=true
+```
+
+```
+lfylm_lwthiqy_lrby/
+  kyf_njd_lkwkb_lslhh_llhyh_-_wthiqy_lfd [Q88Q9ZDjvYg].mp4
+  kyf_njd_lkwkb_lslhh_llhyh_-_wthiqy_lfd [Q88Q9ZDjvYg].ar.srt
+  kyf_njd_lkwkb_lslhh_llhyh_-_wthiqy_lfd [Q88Q9ZDjvYg].summary.md
+```
+
+The original stays in the sidecars, so nothing is lost and everything is still
+searchable in its own script:
+
+```bash
+grep -rl "الفضاء" ~/Downloads/ytkit --include="*.summary.md"
+```
+
+Titles that are already ASCII are left completely alone. Characters yt-dlp
+would rewrite to fullwidth look-alikes (`? : | " * < > / \`) are mapped to plain
+equivalents first, and shell-hostile output (Arabic *ain* romanises to a
+backtick) is stripped, so paths are safe unquoted.
+
+Note that YouTube does **not** expose translated titles to downloaders —
+`--extractor-args youtube:lang=en` returns the original title unchanged, even
+on channels that show localised titles in the web UI. Romanisation is the
+workable route, not translation.
+
 ## Configuration
 
 Settings live in a TOML file — `ytkit config --path` tells you where.
