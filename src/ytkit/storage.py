@@ -9,7 +9,7 @@ from typing import Any
 
 import tomli_w
 
-from .config import CONFIG_PATH, PROFILE_DIR, Config
+from .config import CONFIG_PATH, PROFILE_DIR, Config, parse_bool
 
 
 def _coerce(cfg_cls: type[Config], data: dict[str, Any]) -> dict[str, Any]:
@@ -23,7 +23,10 @@ def _coerce(cfg_cls: type[Config], data: dict[str, Any]) -> dict[str, Any]:
         kind = f.metadata["kind"]
         try:
             if kind == "bool":
-                out[key] = bool(value)
+                parsed = parse_bool(value)
+                if parsed is None:
+                    continue  # unrecognised word: keep the default
+                out[key] = parsed
             elif kind == "int":
                 out[key] = int(value)
             elif kind == "list":

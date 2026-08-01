@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any
 
 import yt_dlp
-from yt_dlp.utils import DownloadCancelled, DownloadError
+from yt_dlp.postprocessor.common import PostProcessor
+from yt_dlp.utils import (
+    DownloadCancelled,
+    DownloadError,
+    ExistingVideoReached,
+    MaxDownloadsReached,
+    RejectedVideoReached,
+)
 
 from . import transcripts
 from .argv import build_argv
@@ -32,6 +39,16 @@ class State(StrEnum):
 
 
 TERMINAL = {State.DONE, State.FAILED, State.CANCELLED}
+
+# yt-dlp signals *planned* early exits by raising subclasses of
+# DownloadCancelled. They mean "finished on purpose", not "the user aborted",
+# so they must not be reported as a cancellation.
+PLANNED_STOP = (ExistingVideoReached, MaxDownloadsReached, RejectedVideoReached)
+STOP_REASONS = {
+    ExistingVideoReached: "stopped at an already-archived video",
+    MaxDownloadsReached: "reached the download limit",
+    RejectedVideoReached: "stopped at a filtered-out video",
+}
 
 _ids = itertools.count(1)
 
@@ -54,6 +71,7 @@ class Job:
     finished_at: float = 0.0
     items_done: int = 0
     _cancel: threading.Event = field(default_factory=threading.Event, repr=False)
+    _processed: set[str] = field(default_factory=set, repr=False)
 
     @property
     def label(self) -> str:
@@ -141,6 +159,30 @@ def probe(url: str, cfg: Config, *, process: bool = False) -> dict[str, Any]:
         return ydl.sanitize_info(ydl.extract_info(url, download=False, process=process))
 
 
+class _SidecarPP(PostProcessor):
+    """Writes ytkit's sidecars for each entry the moment yt-dlp finishes it.
+
+    Registered as an ``after_video`` postprocessor, which fires per entry even
+    when nothing is downloaded (metadata-only runs). Doing the work here rather
+    than after ``extract_info`` returns means a playlist that stops early —
+    archive hit, download cap, filter — still keeps sidecars for what it did
+    complete, instead of losing them to the raised exception.
+    """
+
+    def __init__(self, engine: Engine, job: Job) -> None:
+        super().__init__()
+        self.engine, self.job = engine, job
+
+    def run(self, info: dict[str, Any]) -> tuple[list, dict[str, Any]]:
+        try:
+            self.engine._postprocess_entry(self.job, self._downloader, info)
+        except Exception as exc:  # noqa: BLE001 - never break the download
+            self.engine.sink(
+                Event("log", self.job, f"sidecar failed: {exc}", level="warning")
+            )
+        return [], info
+
+
 class Engine:
     """Runs jobs on a small thread pool, reporting progress through a sink."""
 
@@ -212,6 +254,14 @@ class Engine:
         job.files = [p for p in job.files if p.exists()]
         self._emit_state(job, state, message)
 
+    def _make_ydl(self, opts: dict[str, Any]) -> yt_dlp.YoutubeDL:
+        """Construct the downloader.
+
+        A seam for tests: patching yt_dlp.YoutubeDL at module level would also
+        break parse_options, which reaches for the real class.
+        """
+        return yt_dlp.YoutubeDL(opts)
+
     def _run(self, job: Job) -> None:
         if job._cancel.is_set():
             self._finish(job, State.CANCELLED)
@@ -231,9 +281,16 @@ class Engine:
         )
 
         self._emit_state(job, State.RUNNING)
+        stop_reason = ""
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(job.url, download=True)
+            with self._make_ydl(opts) as ydl:
+                # Sidecars are written per entry, as soon as yt-dlp finishes it,
+                # so a playlist that stops early still keeps what it completed.
+                ydl.add_post_processor(_SidecarPP(self, job), when="after_video")
+                try:
+                    info = ydl.extract_info(job.url, download=True)
+                except PLANNED_STOP as exc:
+                    info, stop_reason = None, STOP_REASONS.get(type(exc), "stopped early")
                 if info is not None:
                     self._emit_state(job, State.POST)
                     self._postprocess(job, ydl, ydl.sanitize_info(info))
@@ -253,7 +310,8 @@ class Engine:
         if job._cancel.is_set():
             self._finish(job, State.CANCELLED)
         else:
-            self._finish(job, State.DONE)
+            job.detail = stop_reason
+            self._finish(job, State.DONE, stop_reason)
 
     # -- hooks ----------------------------------------------------------------
 
@@ -309,42 +367,52 @@ class Engine:
     # -- post-download work ---------------------------------------------------
 
     def _postprocess(self, job: Job, ydl: yt_dlp.YoutubeDL, info: dict[str, Any]) -> None:
-        """Write transcripts and summaries for every entry the job produced."""
-        cfg = job.config
+        """Backstop for any entry the per-entry hook did not already handle."""
         for entry in _iter_entries(info):
-            job.items_done += 1
-            if not job.title:
-                job.title = str(entry.get("title") or "")
+            self._postprocess_entry(job, ydl, entry)
 
-            base = _entry_basepath(ydl, entry)
-            if base is None:
+    def _postprocess_entry(self, job: Job, ydl: yt_dlp.YoutubeDL, entry: dict[str, Any]) -> None:
+        """Write ytkit's sidecars for a single completed entry, once."""
+        marker = str(entry.get("id") or entry.get("webpage_url") or id(entry))
+        with self._lock:
+            if marker in job._processed:
+                return
+            job._processed.add(marker)
+
+        cfg = job.config
+        job.items_done += 1
+        if not job.title:
+            job.title = str(entry.get("title") or "")
+
+        base = _entry_basepath(ydl, entry)
+        if base is None:
+            return
+
+        for download in entry.get("requested_downloads") or []:
+            if download.get("filepath"):
+                self._add_file(job, Path(download["filepath"]))
+
+        header = f"# {entry.get('title', '')}\n{entry.get('webpage_url', '')}"
+        for caption in transcripts.find_captions(base.parent, base.stem):
+            self._add_file(job, caption)  # the final, post-conversion track
+            if not cfg.transcript_txt:
                 continue
+            written = transcripts.convert_file(
+                caption, timestamps=cfg.transcript_timestamps, header=header
+            )
+            if written:
+                self._add_file(job, written)
 
-            for download in entry.get("requested_downloads") or []:
-                if download.get("filepath"):
-                    self._add_file(job, Path(download["filepath"]))
+        if cfg.write_summary:
+            try:
+                self._add_file(job, write_summary(entry, base.with_suffix(".summary.md")))
+            except OSError as exc:
+                self.sink(Event("log", job, f"summary failed: {exc}", level="warning"))
 
-            header = f"# {entry.get('title', '')}\n{entry.get('webpage_url', '')}"
-            for caption in transcripts.find_captions(base.parent, base.stem):
-                self._add_file(job, caption)  # the final, post-conversion track
-                if not cfg.transcript_txt:
-                    continue
-                written = transcripts.convert_file(
-                    caption, timestamps=cfg.transcript_timestamps, header=header
-                )
-                if written:
-                    self._add_file(job, written)
-
-            if cfg.write_summary:
-                try:
-                    self._add_file(job, write_summary(entry, base.with_suffix(".summary.md")))
-                except OSError as exc:
-                    self.sink(Event("log", job, f"summary failed: {exc}", level="warning"))
-
-            # yt-dlp writes .info.json, .description and thumbnails without
-            # announcing them through any hook, so sweep for them by name.
-            for path in _sibling_outputs(base):
-                self._add_file(job, path)
+        # yt-dlp writes .info.json, .description and thumbnails without
+        # announcing them through any hook, so sweep for them by name.
+        for path in _sibling_outputs(base):
+            self._add_file(job, path)
 
 
 def _sibling_outputs(base: Path) -> list[Path]:

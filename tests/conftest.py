@@ -12,7 +12,7 @@ def offline(monkeypatch, request):
     Jobs still travel through the real queue, worker pool and event sink — only
     the yt-dlp call itself is replaced — so the UI plumbing is exercised for real.
     """
-    if "network" in request.keywords:
+    if "network" in request.keywords or "real_run" in request.keywords:
         return
 
     def fake_run(self: Engine, job: Job) -> None:

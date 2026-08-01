@@ -227,3 +227,21 @@ def test_tui_subcommand_reports_a_missing_profile(monkeypatch, tmp_path):
     monkeypatch.setattr("ytkit.storage.PROFILE_DIR", tmp_path)
     result = run("tui", "--profile", "ghost")
     assert result.exit_code != 0
+
+
+def test_set_can_disable_a_boolean_option():
+    """`--set x=false` must switch the option off, not on."""
+    result = run("get", URL, "-s", "subtitles=false", "-s", "auto_subtitles=false", "--dry-run")
+    assert result.exit_code == 0
+    assert "--write-subs" not in out(result)
+
+
+def test_set_can_enable_a_boolean_option():
+    result = run("get", URL, "-s", "embed_subs=true", "--dry-run")
+    assert "--embed-subs" in out(result)
+
+
+def test_set_rejects_an_unparseable_boolean():
+    result = run("get", URL, "-s", "subtitles=maybe", "--dry-run")
+    assert result.exit_code != 0
+    assert "subtitles" in out(result)

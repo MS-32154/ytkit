@@ -123,3 +123,64 @@ def test_every_field_declares_usable_metadata():
         if meta["kind"] == "choice":
             assert meta["choices"], f"{name} is a choice with no options"
             assert Config.default_for(name) in meta["choices"], f"{name} default not in choices"
+
+
+# -- boolean parsing ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("true", True), ("True", True), ("TRUE", True), ("yes", True),
+        ("on", True), ("1", True), ("y", True), (" true ", True), (True, True),
+        ("false", False), ("False", False), ("no", False), ("off", False),
+        ("0", False), ("n", False), ("", False), (False, False),
+    ],
+)
+def test_parse_bool_words(raw, expected):
+    from ytkit.config import parse_bool
+
+    assert parse_bool(raw) is expected
+
+
+@pytest.mark.parametrize("raw", ["maybe", "sometimes", "2ish", "yeah nah"])
+def test_parse_bool_rejects_nonsense(raw):
+    from ytkit.config import parse_bool
+
+    assert parse_bool(raw) is None
+
+
+def test_set_from_string_disables_a_boolean():
+    """bool('false') is True — the reason this needs a real parser."""
+    cfg = Config()
+    assert cfg.subtitles is True
+    assert cfg.set_from_string("subtitles", "false") is True
+    assert cfg.subtitles is False
+
+
+def test_set_from_string_enables_a_boolean():
+    cfg = Config(subtitles=False)
+    assert cfg.set_from_string("subtitles", "true") is True
+    assert cfg.subtitles is True
+
+
+def test_set_from_string_rejects_an_unparseable_boolean():
+    cfg = Config()
+    assert cfg.set_from_string("subtitles", "maybe") is False
+    assert cfg.subtitles is True  # untouched
+
+
+def test_toml_string_booleans_are_parsed_not_truthy(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('subtitles = "false"\nembed_subs = "yes"\n')
+    cfg = load_config(path)
+    assert cfg.subtitles is False
+    assert cfg.embed_subs is True
+
+
+def test_toml_native_booleans_still_work(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text("subtitles = false\nembed_subs = true\n")
+    cfg = load_config(path)
+    assert cfg.subtitles is False
+    assert cfg.embed_subs is True

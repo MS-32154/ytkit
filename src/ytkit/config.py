@@ -52,6 +52,29 @@ def opt(
     return field(default=default, metadata=meta)
 
 
+TRUE_WORDS = {"1", "true", "yes", "on", "y", "t"}
+FALSE_WORDS = {"0", "false", "no", "off", "n", "f", ""}
+
+
+def parse_bool(raw: object) -> bool | None:
+    """Parse a boolean from a switch, a TOML value or a `--set` string.
+
+    Not bool(raw): every non-empty string is truthy, so `--set subs=false`
+    would silently switch the option *on*. Returns None for anything
+    unrecognised so the caller can reject it instead of guessing.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    text = str(raw).strip().lower()
+    if text in TRUE_WORDS:
+        return True
+    if text in FALSE_WORDS:
+        return False
+    return None
+
+
 OUTPUT = "Output"
 FORMAT = "Video & Format"
 AUDIO = "Audio"
@@ -464,7 +487,10 @@ class Config:
         kind = f.metadata["kind"]
         try:
             if kind == "bool":
-                value: Any = bool(raw)
+                parsed = parse_bool(raw)
+                if parsed is None:
+                    return False
+                value: Any = parsed
             elif kind == "int":
                 value = int(str(raw).strip()) if str(raw).strip() else 0
             elif kind == "list":

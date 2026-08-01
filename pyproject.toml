@@ -65,4 +65,8 @@ ignore = ["E501", "B008"]
 testpaths = ["tests"]
 addopts = "-q"
 asyncio_mode = "auto"
+markers = [
+    "network: test reaches the network",
+    "real_run: exercise Engine._run instead of the offline stub",
+]
 asyncio_default_fixture_loop_scope = "function"

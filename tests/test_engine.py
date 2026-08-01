@@ -7,6 +7,9 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+from yt_dlp.utils import ExistingVideoReached, MaxDownloadsReached, RejectedVideoReached
+
 from ytkit.config import Config
 from ytkit.engine import TERMINAL, Engine, Event, Job, State, _entry_basepath, _iter_entries
 
@@ -330,3 +333,135 @@ def test_sibling_sweep_does_not_steal_a_similarly_named_entry(tmp_path):
 
     found = {p.name for p in _sibling_outputs(tmp_path / "Talk 1.mp4")}
     assert found == {"Talk 1.mp4", "Talk 1.info.json"}
+
+
+# -- planned early stops ------------------------------------------------------
+
+
+class FakeYDL:
+    """Stands in for YoutubeDL so Engine._run can be exercised offline."""
+
+    def __init__(self, raises=None, info=None, base=Path("/tmp/x.mp4")):
+        self.raises, self.info, self.base = raises, info, base
+        self.pps = []
+        self.params: dict = {}          # PostProcessor.get_param reads this
+        self._postprocessor_hooks: list = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def add_post_processor(self, pp, when=None):
+        self.pps.append((pp, when))
+        pp.set_downloader(self)
+
+    def extract_info(self, url, download=True):
+        if self.raises is not None:
+            raise self.raises
+        return self.info
+
+    def sanitize_info(self, info):
+        return info
+
+    def prepare_filename(self, info, *a, **k):
+        return str(self.base)
+
+    # PostProcessor.run is metaclass-wrapped with progress reporting, which
+    # calls back into the downloader; these keep the double quiet.
+    def to_screen(self, *a, **k):
+        pass
+
+    def to_console_title(self, *a, **k):
+        pass
+
+    def evaluate_outtmpl(self, tmpl, info, *a, **k):
+        return ""
+
+
+def run_with(monkeypatch, ydl, cfg=None) -> Job:
+    monkeypatch.setattr(Engine, "_make_ydl", lambda self, opts: ydl)
+    engine = Engine(lambda e: None)
+    job = Job(url="https://youtu.be/x", config=cfg or Config())
+    engine._run(job)
+    engine.shutdown(wait=True)
+    return job
+
+
+@pytest.mark.real_run
+@pytest.mark.parametrize(
+    "exc,fragment",
+    [
+        (ExistingVideoReached(), "already-archived"),
+        (MaxDownloadsReached(), "download limit"),
+        (RejectedVideoReached(), "filtered-out"),
+    ],
+    ids=["archive-hit", "max-downloads", "match-filter"],
+)
+def test_planned_stops_finish_as_done_not_cancelled(monkeypatch, exc, fragment):
+    """These subclass DownloadCancelled but mean 'stopped on purpose'."""
+    job = run_with(monkeypatch, FakeYDL(raises=exc))
+    assert job.state is State.DONE
+    assert fragment in job.detail
+
+
+@pytest.mark.real_run
+def test_user_cancellation_is_still_cancelled(monkeypatch):
+    from yt_dlp.utils import DownloadCancelled
+
+    job = run_with(monkeypatch, FakeYDL(raises=DownloadCancelled("user")))
+    assert job.state is State.CANCELLED
+
+
+@pytest.mark.real_run
+def test_download_errors_still_fail(monkeypatch):
+    from yt_dlp.utils import DownloadError
+
+    job = run_with(monkeypatch, FakeYDL(raises=DownloadError("boom")))
+    assert job.state is State.FAILED
+
+
+@pytest.mark.real_run
+def test_sidecar_pp_is_registered_for_after_video(monkeypatch):
+    ydl = FakeYDL(info=info_dict())
+    run_with(monkeypatch, ydl)
+    assert [when for _, when in ydl.pps] == ["after_video"]
+
+
+@pytest.mark.real_run
+def test_sidecars_survive_a_planned_stop(monkeypatch, tmp_path):
+    """The whole point: entries completed before the stop keep their sidecars."""
+    media = tmp_path / "Talk [x].mp4"
+    media.write_bytes(b"")
+    ydl = FakeYDL(raises=ExistingVideoReached(), base=media)
+
+    from ytkit.engine import _SidecarPP
+
+    monkeypatch.setattr(Engine, "_make_ydl", lambda self, opts: ydl)
+    engine = Engine(lambda e: None)
+    job = Job(url="https://youtu.be/x", config=Config(output_dir=str(tmp_path)))
+
+    # Emulate yt-dlp completing one entry, then hitting the archived one.
+    pp = _SidecarPP(engine, job)
+    pp.set_downloader(ydl)
+    pp.run(info_dict(title="Talk", vid="x"))
+    engine._run(job)
+    engine.shutdown(wait=True)
+
+    assert job.state is State.DONE
+    assert (tmp_path / "Talk [x].summary.md").is_file()
+
+
+def test_entries_are_not_post_processed_twice(tmp_path):
+    """The per-entry hook and the end-of-run backstop must not duplicate work."""
+    media = tmp_path / "Talk [x].mp4"
+    media.write_bytes(b"")
+    engine, job, _ = make_engine_and_job(tmp_path)
+    entry = info_dict(title="Talk", vid="x")
+
+    engine._postprocess_entry(job, StubYDL(media), entry)
+    engine._postprocess(job, StubYDL(media), entry)  # backstop sees it again
+    engine.shutdown(wait=True)
+
+    assert job.items_done == 1
