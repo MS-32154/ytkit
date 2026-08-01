@@ -1,0 +1,156 @@
+/* ytkit — terminal UI styling */
+
+Screen {
+    background: $surface;
+}
+
+#entry-row {
+    height: 3;
+    padding: 0 1;
+}
+
+#url-input {
+    width: 1fr;
+}
+
+#preset-select {
+    width: 26;
+    margin-left: 1;
+}
+
+#add-btn {
+    margin-left: 1;
+    min-width: 9;
+}
+
+.panel-hint {
+    color: $text-muted;
+    padding: 0 2;
+    height: auto;
+}
+
+#job-table {
+    height: 1fr;
+    min-height: 8;
+    margin: 1 1 0 1;
+    border: round $primary 40%;
+}
+
+.pane-title {
+    padding: 0 2;
+    color: $text-muted;
+    text-style: bold;
+}
+
+#log {
+    height: 14;
+    margin: 0 1 1 1;
+    padding: 0 1;
+    border: round $primary 30%;
+    background: $surface-darken-1;
+}
+
+/* -- settings ------------------------------------------------------------- */
+
+SettingsPanel {
+    padding: 1 2;
+}
+
+.section {
+    margin-bottom: 1;
+    border: round $primary 30%;
+}
+
+.field-row {
+    height: auto;
+    min-height: 3;
+    padding: 0 1;
+    align-vertical: middle;
+}
+
+.field-label {
+    width: 34;
+    padding: 1 1 0 0;
+    color: $text;
+}
+
+.field-input {
+    width: 44;
+}
+
+Input.field-input {
+    width: 44;
+}
+
+Select.field-input {
+    width: 44;
+}
+
+.field-help {
+    width: 1fr;
+    padding: 1 0 0 2;
+    color: $text-muted;
+    text-style: italic;
+}
+
+/* -- command tab ---------------------------------------------------------- */
+
+.command-view {
+    padding: 1 2;
+    height: auto;
+}
+
+/* -- modals --------------------------------------------------------------- */
+
+.modal {
+    background: $panel;
+    border: thick $primary;
+    padding: 1 2;
+}
+
+#modal-info {
+    width: 90%;
+    height: 85%;
+}
+
+#modal-profiles {
+    width: 60;
+    height: auto;
+    max-height: 80%;
+}
+
+#modal-confirm {
+    width: 60;
+    height: auto;
+}
+
+.modal-title {
+    text-style: bold;
+    color: $accent;
+    padding-bottom: 1;
+}
+
+.modal-hint {
+    color: $text-muted;
+    padding-top: 1;
+}
+
+.modal-buttons {
+    height: auto;
+    padding-top: 1;
+    align-horizontal: right;
+}
+
+.modal-buttons Button {
+    margin-left: 1;
+}
+
+#profile-list {
+    max-height: 12;
+    border: round $primary 40%;
+    margin-bottom: 1;
+}
+
+ModalScreen {
+    align: center middle;
+}

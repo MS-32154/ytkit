@@ -1,0 +1,65 @@
+[project]
+name = "ytkit"
+version = "0.1.0"
+description = "Terminal toolkit for downloading YouTube video, audio, captions, transcripts and metadata"
+readme = "README.md"
+authors = [
+    { name = "MS-32154", email = "58910473+MS-32154@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+license = { text = "MIT" }
+keywords = ["youtube", "yt-dlp", "tui", "transcript", "subtitles", "metadata", "downloader"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "platformdirs>=4.2",
+    "questionary>=2.0",
+    "rich>=13.7",
+    "textual>=1.0",
+    "tomli-w>=1.0",
+    "typer>=0.12",
+    "yt-dlp>=2025.1.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/MS-32154/ytkit"
+Issues = "https://github.com/MS-32154/ytkit/issues"
+
+[project.scripts]
+ytkit = "ytkit.cli:entrypoint"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "ytkit"
+module-root = "src"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501", "B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
