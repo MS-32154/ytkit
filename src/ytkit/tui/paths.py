@@ -13,6 +13,22 @@ from textual.widgets import Input
 SEPARATORS = {"/", os.sep} | ({os.altsep} if os.altsep else set())
 
 
+def common_prefix(words: list[str]) -> str:
+    """The characters every word starts with.
+
+    Not os.path.commonprefix, deprecated in 3.15, nor its suggested
+    replacement commonpath, which compares whole path components: completion
+    needs the shared characters of names like "Music/" and "Movies/".
+    """
+    if not words:
+        return ""
+    first, last = min(words), max(words)  # the two that differ soonest
+    i = 0
+    while i < min(len(first), len(last)) and first[i] == last[i]:
+        i += 1
+    return first[:i]
+
+
 def complete_path(value: str, *, dirs_only: bool = False) -> str | None:
     """Complete a path the way a shell's tab completion would.
 
@@ -46,7 +62,7 @@ def complete_path(value: str, *, dirs_only: bool = False) -> str | None:
         return None
     if len(matches) == 1:
         return head + matches[0]
-    common = os.path.commonprefix(matches)
+    common = common_prefix(matches)
     return head + common if len(common) > len(stem) else None
 
 

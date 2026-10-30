@@ -149,3 +149,13 @@ async def test_tab_without_a_suggestion_moves_focus(tree):
         await pilot.pause(0.1)
         await pilot.press("tab")
         assert pilot.app.focused is pilot.app.query_one("#next", Input)
+
+
+@pytest.mark.parametrize(
+    "words,prefix",
+    [([], ""), (["Music/"], "Music/"), (["Music/", "Movies/"], "M"), (["videos/", "videos.txt"], "videos"), (["a", "b"], "")],
+)
+async def test_common_prefix(words, prefix):
+    from ytkit.tui.paths import common_prefix
+
+    assert common_prefix(words) == prefix
