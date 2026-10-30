@@ -248,3 +248,13 @@ def test_set_rejects_an_unparseable_boolean():
     result = run("get", URL, "-s", "subtitles=maybe", "--dry-run")
     assert result.exit_code != 0
     assert "subtitles" in out(result)
+
+
+def test_version_comes_from_pyproject():
+    import tomllib
+    from pathlib import Path
+
+    from ytkit import __version__
+
+    pyproject = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    assert __version__ == pyproject["project"]["version"]

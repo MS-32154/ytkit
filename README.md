@@ -1,5 +1,10 @@
 # ytkit
 
+[![CI](https://github.com/MS-32154/ytkit/actions/workflows/ci.yml/badge.svg)](https://github.com/MS-32154/ytkit/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/MS-32154/ytkit?include_prereleases&sort=semver)](https://github.com/MS-32154/ytkit/releases)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 A terminal toolkit for pulling **video, audio, captions, transcripts and metadata**
 off YouTube — with a full-screen TUI, a guided wizard, and a scriptable CLI.
 
@@ -23,6 +28,13 @@ for merging, audio extraction and embedding.
 git clone https://github.com/MS-32154/ytkit && cd ytkit
 uv sync
 uv run ytkit          # launches the TUI
+```
+
+Or install straight from GitHub, no clone needed; add `@vX.Y.Z` to pin a
+[release](https://github.com/MS-32154/ytkit/releases):
+
+```bash
+uv tool install git+https://github.com/MS-32154/ytkit
 ```
 
 Install it as a standalone tool:
@@ -277,6 +289,21 @@ uv run ruff check src/ tests/
 
 The suite stubs the yt-dlp call itself but exercises the real queue, worker
 pool, event sink and TUI — Textual's headless pilot drives the actual widgets.
+
+### Releasing
+
+The version lives in `pyproject.toml` alone. To release, bump it and push:
+
+```bash
+uv version --bump minor          # or patch / major; 1.2.0rc1-style versions work too
+git commit -am "Release $(uv version --short)" && git push
+```
+
+The **Release** workflow notices the new version, runs the full suite, tags
+`vX.Y.Z`, builds the wheel and sdist, and publishes a GitHub release with
+generated notes (versions with a letter in them go out as pre-releases).
+**CI** runs lint and tests on Python 3.12 and 3.13 for every push and pull
+request.
 
 ## Licence
 
