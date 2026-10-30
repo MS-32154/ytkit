@@ -239,6 +239,25 @@ def build_argv(cfg: Config, urls: list[str] | None = None) -> list[str]:
     return a
 
 
-def build_command(cfg: Config, urls: list[str] | None = None) -> str:
-    """The equivalent shell command, for display and copy-paste."""
-    return "yt-dlp " + " ".join(shlex.quote(x) for x in build_argv(cfg, urls))
+def is_option(word: str) -> bool:
+    """An option name, as opposed to a value such as `-` or `-1`."""
+    if word.startswith("--"):
+        return len(word) > 2
+    return len(word) == 2 and word[0] == "-" and word[1].isalpha()
+
+
+def build_command(cfg: Config, urls: list[str] | None = None, *, multiline: bool = False) -> str:
+    """The equivalent shell command, for display and copy-paste.
+
+    `multiline` puts each option on its own backslash-continued line, which
+    still pastes into a shell as one command.
+    """
+    if not multiline:
+        return "yt-dlp " + " ".join(shlex.quote(x) for x in build_argv(cfg, urls))
+    lines: list[list[str]] = [["yt-dlp"]]
+    for word in build_argv(cfg):
+        if is_option(word) or len(lines) == 1:
+            lines.append([])
+        lines[-1].append(shlex.quote(word))
+    lines += [[shlex.quote(url)] for url in urls or []]
+    return " \\\n  ".join(" ".join(line) for line in lines)

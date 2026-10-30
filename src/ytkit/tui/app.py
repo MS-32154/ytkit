@@ -12,6 +12,7 @@ from rich.markup import escape
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -93,7 +94,7 @@ class QueuePanel(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(id="entry-row"):
             yield Input(
-                placeholder="Paste a video, playlist or channel URL and press Enter…",
+                placeholder="Paste a video, playlist or channel URL and press Enter · esc for shortcuts",
                 id="url-input",
             )
             yield Select(
@@ -116,16 +117,22 @@ class YtkitApp(App[None]):
     TITLE = "ytkit"
     SUB_TITLE = "YouTube media & metadata"
 
+    # ctrl+p belongs to Textual's command palette, which takes it first.
     BINDINGS = [
-        ("a", "focus_url", "Add URL"),
+        ("a", "focus_url", "Add"),
         ("i", "inspect", "Inspect"),
         ("x", "cancel_job", "Cancel"),
         ("r", "retry_job", "Retry"),
-        ("o", "open_output", "Open folder"),
-        ("c", "copy_command", "Show command"),
-        ("ctrl+s", "save_config", "Save config"),
-        ("ctrl+p", "profiles", "Profiles"),
-        ("ctrl+l", "clear_log", "Clear log"),
+        ("o", "open_output", "Folder"),
+        ("c", "copy_command", "Copy"),
+        ("p", "profiles", "Profiles"),
+        # The tab labels carry the numbers, so the footer doesn't have to.
+        Binding("1", "show_tab('tab-queue')", "Queue", show=False),
+        Binding("2", "show_tab('tab-settings')", "Settings", show=False),
+        Binding("3", "show_tab('tab-command')", "Command", show=False),
+        ("escape", "leave_input", "Shortcuts"),
+        ("ctrl+s", "save_config", "Save"),
+        Binding("ctrl+l", "clear_log", "Clear log", show=False),
         ("ctrl+q", "quit", "Quit"),
     ]
 
@@ -145,13 +152,13 @@ class YtkitApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with TabbedContent(id="tabs"):
-            with TabPane("Queue", id="tab-queue"):
+            with TabPane("[dim]1[/] Queue", id="tab-queue"):
                 yield QueuePanel()
-            with TabPane("Settings", id="tab-settings"):
+            with TabPane("[dim]2[/] Settings", id="tab-settings"):
                 yield SettingsPanel(self.cfg, id="settings-panel")
-            with TabPane("Command", id="tab-command"), VerticalScroll():
+            with TabPane("[dim]3[/] Command", id="tab-command"), VerticalScroll(id="command-scroll"):
                 yield Static("", id="command-view", classes="command-view")
-        yield Footer()
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         table = self.query_one("#job-table", DataTable)
@@ -216,10 +223,10 @@ class YtkitApp(App[None]):
         view = self._widget("#command-view", Static)
         if view is None:
             return
-        preview = build_command(self.cfg, ["<URL>"])
+        preview = build_command(self.cfg, ["<URL>"], multiline=True)
         changed = self.cfg.diff_from_defaults()
         lines = [
-            "[b]Equivalent yt-dlp command[/b]",
+            "[b]Equivalent yt-dlp command[/b]  [dim]c copies it[/dim]",
             "",
             f"[cyan]{escape(preview)}[/cyan]",
             "",
@@ -356,9 +363,39 @@ class YtkitApp(App[None]):
 
     # -- actions --------------------------------------------------------------
 
+    def action_show_tab(self, tab: str) -> None:
+        """Switch tab and take focus with it.
+
+        Focus has to move first. Left on a widget in the old pane, it is hidden
+        by the switch, Textual moves it to the next focusable widget in that
+        same pane, and focusing inside a pane activates it again, so the tab
+        snaps straight back.
+        """
+        self.set_focus(None)
+        self.query_one("#tabs", TabbedContent).active = tab
+        target = {
+            "tab-queue": "#job-table",
+            "tab-settings": "#settings-panel",
+            "tab-command": "#command-scroll",
+        }[tab]
+        self.query_one(target).focus()
+
     def action_focus_url(self) -> None:
-        self.query_one("#tabs", TabbedContent).active = "tab-queue"
+        self.action_show_tab("tab-queue")
         self.query_one("#url-input", Input).focus()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # Offered only while typing, so esc still reaches anything else that wants it.
+        if action == "leave_input":
+            return isinstance(self.focused, Input)
+        return True
+
+    def action_leave_input(self) -> None:
+        """Hand the keyboard back to the shortcuts, which a text box swallows."""
+        if self.query_one("#tabs", TabbedContent).active == "tab-queue":
+            self.query_one("#job-table").focus()
+        else:
+            self.set_focus(None)
 
     def action_cancel_job(self) -> None:
         job = self.selected_job()
@@ -394,8 +431,22 @@ class YtkitApp(App[None]):
             self.notify(f"Could not open folder: {exc}", severity="error")
 
     def action_copy_command(self) -> None:
-        self.query_one("#tabs", TabbedContent).active = "tab-command"
+        """Copy the yt-dlp command; from the job table, the selected job's own.
+
+        A job's command stays in the queue, so several can be copied in turn,
+        and because the Command tab previews the current settings rather than
+        that job's. Anywhere else the tab opens on exactly what was copied.
+        """
+        table = self._widget("#job-table", DataTable)
+        job = self.selected_job() if table is not None and table.has_focus else None
+        if job is not None:
+            self.copy_to_clipboard(build_command(job.config, [job.url]))
+            self.notify(f"Copied the yt-dlp command for job {job.id}")
+            return
+        self.copy_to_clipboard(build_command(self.cfg, ["<URL>"]))
         self.refresh_command()
+        self.action_show_tab("tab-command")
+        self.notify("Copied the yt-dlp command")
 
     def action_inspect(self) -> None:
         job = self.selected_job()

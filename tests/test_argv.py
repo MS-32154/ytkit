@@ -168,3 +168,22 @@ def test_no_unknown_options_reach_ytdl():
     cfg = PRESETS[1].apply(Config())  # archival: the widest surface
     parser = yt_dlp.parse_options(build_argv(cfg, [URL]))
     assert parser.urls == [URL]
+
+
+def test_multiline_keeps_dash_values_with_their_option():
+    cfg = Config(output_template="-", extra_args="--sleep-interval -1 -N 4")
+    lines = [line.strip(" \\") for line in build_command(cfg, [URL], multiline=True).splitlines()]
+    assert "--output -" in lines
+    assert "--sleep-interval -1" in lines
+    assert "-N 4" in lines
+
+
+def test_multiline_command_is_the_same_command():
+    import shlex
+
+    cfg = Config(output_template="%(title)s [%(id)s].%(ext)s")
+    multi = build_command(cfg, [URL, "https://youtu.be/second"], multiline=True)
+    assert all(line.endswith(" \\") for line in multi.splitlines()[:-1])
+    assert multi.splitlines()[-1].strip() == "https://youtu.be/second"
+    joined = multi.replace(" \\\n  ", " ")
+    assert shlex.split(joined) == shlex.split(build_command(cfg, [URL, "https://youtu.be/second"]))

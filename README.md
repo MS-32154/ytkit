@@ -57,16 +57,24 @@ equivalent `yt-dlp` invocation plus every setting you've changed from default.
 
 | Key | Action |
 | --- | --- |
+| `1` `2` `3` | Queue, Settings, Command tabs |
+| `esc` | Leave a text box, so the one-letter keys work again |
 | `a` | Focus the URL box |
 | `i` | Inspect the selected job / pasted URL (metadata, no download) |
 | `x` | Cancel the selected job |
 | `r` | Retry a failed or cancelled job |
 | `o` | Open the output folder |
-| `c` | Show the equivalent yt-dlp command |
+| `c` | Copy the equivalent yt-dlp command — from the job table, that job's own |
+| `p` | Save / load / delete a named profile |
 | `ctrl+s` | Save the current settings as your config |
-| `ctrl+p` | Save / load / delete a named profile |
 | `ctrl+l` | Clear the log |
+| `ctrl+p` | Textual's command palette |
 | `ctrl+q` | Quit (confirms if downloads are running) |
+
+Path settings complete as you type, like a shell: `tab` or `→` accepts the
+suggestion, and the output and temporary directory fields only offer folders.
+Copying uses the terminal's clipboard escape (OSC 52), which most terminals
+support and macOS Terminal does not.
 
 ### 2. Wizard — `ytkit wizard`
 

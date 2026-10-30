@@ -119,7 +119,7 @@ def test_every_field_declares_usable_metadata():
         meta = f.metadata
         assert meta["label"], f"{name} has no label"
         assert meta["section"], f"{name} has no section"
-        assert meta["kind"] in ("bool", "int", "text", "path", "choice", "list")
+        assert meta["kind"] in ("bool", "int", "text", "path", "dir", "choice", "list")
         if meta["kind"] == "choice":
             assert meta["choices"], f"{name} is a choice with no options"
             assert Config.default_for(name) in meta["choices"], f"{name} default not in choices"

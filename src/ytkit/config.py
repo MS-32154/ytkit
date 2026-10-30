@@ -24,7 +24,8 @@ PROFILE_DIR = CONFIG_DIR / "profiles"
 
 # --- field kinds -------------------------------------------------------------
 # bool   -> Switch          int    -> numeric Input
-# text   -> Input           path   -> Input (expanded to Path)
+# text   -> Input           path   -> Input, completes files and folders
+# dir    -> Input, completes folders only
 # choice -> Select          list   -> comma-separated Input
 
 
@@ -96,7 +97,7 @@ class Config:
         str(Path.home() / "Downloads" / "ytkit"),
         label="Output directory",
         section=OUTPUT,
-        kind="path",
+        kind="dir",
         help="Root folder for all downloads.",
     )
     output_template: str = opt(
@@ -109,7 +110,7 @@ class Config:
         "",
         label="Temporary directory",
         section=OUTPUT,
-        kind="path",
+        kind="dir",
         help="Where partial files are staged. Empty = alongside the output.",
     )
     archive_file: str = opt(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from textual.binding import Binding
 from textual.widgets import DataTable, Input, RichLog, Select, Static, Switch, TabbedContent
 
 from ytkit.config import Config
@@ -118,7 +119,8 @@ async def test_bindings_are_reachable(tmp_path):
     """Every declared binding must map to an existing action."""
     async with app_with(tmp_path).run_test() as pilot:
         for binding in YtkitApp.BINDINGS:
-            action = binding[1]
+            action = binding.action if isinstance(binding, Binding) else binding[1]
+            action = action.split("(")[0]
             assert hasattr(pilot.app, f"action_{action}"), f"missing action_{action}"
 
 
@@ -306,3 +308,95 @@ async def test_every_boolean_setting_can_be_toggled_off(tmp_path):
         await pilot.pause()
         still_on = [n for n in enabled if getattr(app.cfg, n)]
         assert not still_on, f"could not turn off: {still_on}"
+
+
+# -- keyboard reach -------------------------------------------------------------
+
+
+async def test_show_command_works_while_a_job_is_selected(tmp_path):
+    """Focus left in the queue used to drag the view straight back to it."""
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.add_url("https://example.com/watch?v=c")
+        app._drain_events()
+        await pilot.pause()
+        app.query_one("#job-table", DataTable).focus()
+        await pilot.press("3")
+        await pilot.pause(0.2)
+        assert app.query_one("#tabs", TabbedContent).active == "tab-command"
+
+
+async def test_copy_from_the_table_uses_the_selected_job(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.add_url("https://example.com/watch?v=copied")
+        app._drain_events()
+        await pilot.pause()
+        table = app.query_one("#job-table", DataTable)
+        table.focus()
+        await pilot.press("c")
+        await pilot.pause()
+        assert app.clipboard.startswith("yt-dlp ")
+        assert app.clipboard.endswith("'https://example.com/watch?v=copied'")
+        # Stays put, so the next job's command is one keypress away.
+        assert app.query_one("#tabs", TabbedContent).active == "tab-queue"
+        assert app.focused is table
+
+
+async def test_copy_elsewhere_uses_the_current_settings(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.add_url("https://example.com/watch?v=ignored")
+        app._drain_events()
+        await pilot.pause()
+        app.action_show_tab("tab-settings")
+        await pilot.pause()
+        await pilot.press("c")
+        assert app.clipboard.endswith("'<URL>'")
+
+
+@pytest.mark.parametrize("key,tab", [("2", "tab-settings"), ("3", "tab-command"), ("1", "tab-queue")])
+async def test_number_keys_switch_tabs_and_stay(tmp_path, key, tab):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.pause()
+        app.query_one("#job-table", DataTable).focus()
+        if key == "1":
+            await pilot.press("3")
+        await pilot.press(key)
+        await pilot.pause(0.2)
+        assert app.query_one("#tabs", TabbedContent).active == tab
+
+
+async def test_escape_leaves_the_url_box_for_the_shortcuts(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.pause()
+        assert isinstance(app.focused, Input)
+        await pilot.press("escape", "2")
+        await pilot.pause(0.2)
+        assert app.query_one("#url-input", Input).value == ""
+        assert app.query_one("#tabs", TabbedContent).active == "tab-settings"
+
+
+async def test_p_opens_profiles(tmp_path):
+    from ytkit.tui.modals import ProfileScreen
+
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.pause()
+        await pilot.press("escape", "p")
+        await pilot.pause()
+        assert isinstance(app.screen, ProfileScreen)
+
+
+async def test_path_settings_complete(tmp_path):
+    from ytkit.tui.paths import PathInput
+
+    async with app_with(tmp_path).run_test() as pilot:
+        panel = pilot.app.query_one("#settings-panel", SettingsPanel)
+        for name in ("output_dir", "temp_dir", "archive_file", "cookies_file", "ffmpeg_location"):
+            field = panel.query_one(f"#{widget_id(name)}")
+            assert isinstance(field, PathInput), name
+        assert panel.query_one(f"#{widget_id('output_dir')}", PathInput).suggester.dirs_only
+        assert not panel.query_one(f"#{widget_id('cookies_file')}", PathInput).suggester.dirs_only

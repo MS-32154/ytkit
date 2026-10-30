@@ -10,6 +10,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Collapsible, Input, Label, Select, Static, Switch
 
 from ..config import Config
+from .paths import PathInput
 
 NONE_LABEL = "(none)"
 
@@ -40,6 +41,14 @@ class FieldRow(Horizontal):
             options = [(NONE_LABEL if c == "" else c, c) for c in meta["choices"]]
             current = value if value in meta["choices"] else meta["choices"][0]
             yield Select(options, value=current, id=wid, allow_blank=False, classes="field-input")
+        elif kind in ("path", "dir"):
+            yield PathInput(
+                value=self.cfg.display(f.name),
+                placeholder=meta["placeholder"] or "type a path, tab to complete",
+                id=wid,
+                dirs_only=kind == "dir",
+                classes="field-input",
+            )
         else:
             yield Input(
                 value=self.cfg.display(f.name),
@@ -63,7 +72,7 @@ class SettingsPanel(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield Static(
             "Changes apply to new downloads immediately. "
-            "Press [b]ctrl+s[/b] to persist them, [b]ctrl+p[/b] for profiles.",
+            "Press [b]ctrl+s[/b] to save them as your config; [b]esc[/b] then [b]p[/b] for profiles.",
             classes="panel-hint",
         )
         for index, (section, fields_) in enumerate(Config.sections().items()):
