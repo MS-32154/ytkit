@@ -192,3 +192,12 @@ def test_parse_value_checks_without_setting():
     assert Config.parse_value("max_fps", "-")[0] is False
     assert Config.parse_value("sub_langs", "en, fr") == (True, ["en", "fr"])
     assert cfg == Config()
+
+
+def test_ui_state_is_written_whole(tmp_path):
+    from ytkit.storage import load_ui_state, save_ui_state
+
+    path = tmp_path / "tui.toml"
+    save_ui_state({"theme": "nord"}, path)
+    assert load_ui_state(path) == {"theme": "nord"}
+    assert [p.name for p in tmp_path.iterdir()] == ["tui.toml"]  # no temp left behind

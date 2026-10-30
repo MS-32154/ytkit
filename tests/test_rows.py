@@ -40,3 +40,7 @@ def test_long_reasons_fit_the_column():
     cell = progress_cell(job(State.FAILED, error="ERROR: " + "x" * 80))
     assert cell.cell_len <= PROGRESS_WIDTH
     assert str(cell).endswith("…")
+
+
+def test_compact_percent_never_claims_done_early():
+    assert str(progress_cell(job(State.RUNNING, percent=99.6), width=5)).strip() == "99%"

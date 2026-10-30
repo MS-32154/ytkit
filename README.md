@@ -37,18 +37,21 @@ ytkit
 ### 1. TUI — `ytkit`
 
 ```
-┌ Queue ─ Settings ─ Command ──────────────────────────────────────────────┐
+ 1 Queue   2 Settings   3 Command
+┌──────────────────────────────────────────────────────────────────────────┐
 │ Paste a video, playlist or channel URL and press Enter…   [Preset ▾] Add │
 │ ┌──────────────────────────────────────────────────────────────────────┐ │
-│ │ #  Status       Title / URL                Progress      Speed   ETA │ │
-│ │ 1  downloading  Big Buck Bunny 60fps 4K    ████████░░ 63%  4.2MiB/s  │ │
-│ │ 2  done         How to sound smart in …    ██████████ 100%           │ │
-│ │ 3  processing   Me at the zoo [ExtractA…]  ██████████ 100%           │ │
+│ │ #  Status       Title / URL              Progress            Speed   │ │
+│ │ 1  downloading  Big Buck Bunny 60fps 4K  ███████░░░░░  63.0% 4.2MiB/s│ │
+│ │ 2  done         Me at the zoo            ████████████ 100.0%         │ │
+│ │ 3  failed       https://youtu.be/…       Private video               │ │
 │ └──────────────────────────────────────────────────────────────────────┘ │
-│ Log                                                                      │
-│ job 2 → …/How to sound smart in your TEDx Talk.en.srt                    │
-│ ✓ job 2 finished in 14s                                                  │
+│ ┌ Log ─────────────────────────────────────────────────────────────────┐ │
+│ │ job 2 → …/Me at the zoo [jNQXAC9IVRw].en.txt                         │ │
+│ │ ✓ job 2 finished in 4s                                               │ │
+│ └──────────────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────────────┘
+ ^q Quit  a Add  i Inspect  x Cancel  o Folder  c Copy  p Profiles  ^s Save
 ```
 
 Queue as many URLs as you like; they download in parallel. The **Settings** tab
@@ -60,7 +63,7 @@ equivalent `yt-dlp` invocation plus every setting you've changed from default.
 | `1` `2` `3` | Queue, Settings, Command tabs |
 | `esc` | Leave a text box, so the one-letter keys work again |
 | `a` | Focus the URL box |
-| `i` | Inspect the selected job / pasted URL (metadata, no download) |
+| `i` | Inspect the pasted URL, else the selected job (metadata, no download); `a` there queues a pasted URL |
 | `x` | Cancel the selected job, or remove it from the list once finished |
 | `X` | Remove every finished job from the list |
 | `r` | Retry a failed or cancelled job |
@@ -70,8 +73,13 @@ equivalent `yt-dlp` invocation plus every setting you've changed from default.
 | `/` | Filter the settings |
 | `ctrl+s` | Save the current settings as your config |
 | `ctrl+l` | Clear the log |
-| `ctrl+p` | Textual's command palette |
+| `ctrl+p` | Command palette: every action above, plus the theme picker |
 | `ctrl+q` | Quit (confirms if downloads are running) |
+
+The theme you pick in the palette is remembered between runs (in `tui.toml`,
+next to the config, so it never becomes a download setting). On a narrow
+terminal the queue drops the progress bar for a percentage and puts a failed
+job's reason before its title, and each setting's help moves under it.
 
 The footer only offers what applies to the selected job. A failed job's row
 says why it failed, and a URL that is already queued or downloading is not

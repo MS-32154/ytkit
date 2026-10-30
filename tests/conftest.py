@@ -22,3 +22,9 @@ def offline(monkeypatch, request):
         self._finish(job, State.DONE)
 
     monkeypatch.setattr(Engine, "_run", fake_run)
+
+
+@pytest.fixture(autouse=True)
+def private_ui_state(monkeypatch, tmp_path):
+    """Keep the TUI's remembered theme out of the real config directory."""
+    monkeypatch.setattr("ytkit.storage.UI_PATH", tmp_path / "tui.toml")

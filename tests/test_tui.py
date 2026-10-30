@@ -211,16 +211,47 @@ async def test_title_column_fills_available_width(tmp_path, width, expected_min)
         assert app.title_width <= 70  # MAX_TITLE, so wide terminals stay readable
 
 
-async def test_table_columns_fit_without_horizontal_scroll(tmp_path):
-    from ytkit.tui.app import CELL_PADDING, FIXED_WIDTH
+@pytest.mark.parametrize("width", [80, 90, 100, 140, 220])
+async def test_table_columns_fit_without_horizontal_scroll(tmp_path, width):
+    from ytkit.tui.app import fixed_width
 
-    async with app_with(tmp_path).run_test(size=(100, 30)) as pilot:
+    async with app_with(tmp_path).run_test(size=(width, 30)) as pilot:
         app = pilot.app
         await pilot.pause()
         app._fit_title_column()
         table = app.query_one("#job-table", DataTable)
-        total = FIXED_WIDTH + app.title_width + CELL_PADDING
-        assert total <= table.size.width
+        assert fixed_width(app.columns) + app.title_width <= table.size.width
+
+
+@pytest.mark.parametrize("width,compact", [(80, True), (100, True), (120, False)])
+async def test_narrow_terminals_get_the_compact_table(tmp_path, width, compact):
+    from ytkit.tui.app import COMPACT_COLUMNS
+
+    async with app_with(tmp_path).run_test(size=(width, 30)) as pilot:
+        app = pilot.app
+        job = place(app, State.RUNNING, percent=63.0, size="1.0GiB")
+        await pilot.pause()
+        app._fit_title_column()
+        await pilot.pause()
+        assert (app.columns == COMPACT_COLUMNS) is compact
+        progress = str(app.query_one("#job-table", DataTable).get_cell(str(job.id), "progress"))
+        assert ("█" not in progress) is compact
+        assert "63" in progress
+
+
+async def test_changing_layout_keeps_rows_and_selection(tmp_path):
+    async with app_with(tmp_path).run_test(size=(140, 30)) as pilot:
+        app = pilot.app
+        await pilot.pause()
+        jobs = [place(app, State.DONE) for _ in range(3)]
+        table = app.query_one("#job-table", DataTable)
+        table.move_cursor(row=2)
+        await pilot.resize_terminal(80, 30)
+        await pilot.pause(0.3)
+        app._fit_title_column()
+        await pilot.pause()
+        assert table.row_count == 3
+        assert app.selected_job() is jobs[2]
 
 
 async def test_long_titles_are_truncated_to_the_column(tmp_path):
@@ -610,8 +641,11 @@ async def test_late_events_do_not_revive_a_removed_row(tmp_path):
         assert app.query_one("#job-table", DataTable).row_count == 0
 
 
-async def test_failed_row_says_why(tmp_path):
-    async with app_with(tmp_path).run_test() as pilot:
+@pytest.mark.parametrize("width", [80, 140])
+async def test_failed_row_says_why(tmp_path, width):
+    from ytkit.tui.app import COLUMNS
+
+    async with app_with(tmp_path).run_test(size=(width, 30)) as pilot:
         app = pilot.app
         job = place(
             app,
@@ -619,8 +653,12 @@ async def test_failed_row_says_why(tmp_path):
             error="ERROR: [youtube] jNQXAC9IVRw: Private video. Sign in if you've been granted access",
         )
         await pilot.pause()
-        cell = app.query_one("#job-table", DataTable).get_cell(str(job.id), "progress")
-        assert str(cell) == "Private video"
+        table = app.query_one("#job-table", DataTable)
+        cell = table.get_cell(str(job.id), "progress")
+        if app.columns == COLUMNS:
+            assert str(cell) == "Private video"
+        else:  # compact: the reason rides on the title, where it fits
+            assert str(table.get_cell(str(job.id), "title")).startswith("Private video · ")
 
 
 async def test_open_folder_from_a_job_opens_its_own(tmp_path, monkeypatch):
@@ -697,3 +735,194 @@ async def test_open_folder_for_a_job_without_files_uses_its_own_settings(tmp_pat
         app.query_one("#job-table", DataTable).focus()
         await pilot.press("o")
         assert opened == [tmp_path / "theirs"]
+
+
+# -- layout and polish -----------------------------------------------------------
+
+
+async def test_settings_help_survives_a_narrow_terminal(tmp_path):
+    async with app_with(tmp_path).run_test(size=(80, 30)) as pilot:
+        app = pilot.app
+        app.action_show_tab("tab-settings")
+        await pilot.pause(0.3)
+        assert app.screen.has_class("-narrow")
+        help_text = app.query_one("#settings-panel .field-help", Static)
+        assert help_text.size.width > 20
+
+
+async def test_preset_hint_takes_no_room_until_a_preset_is_picked(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        hint = app.query_one("#preset-hint", Static)
+        assert not hint.display
+        app.query_one("#preset-select", Select).value = "audio"
+        await pilot.pause()
+        assert hint.display
+
+
+async def test_theme_is_remembered_but_not_written_at_startup(tmp_path):
+    from ytkit import storage
+
+    async with app_with(tmp_path).run_test() as pilot:
+        await pilot.pause()
+        assert not storage.UI_PATH.exists()
+        pilot.app.theme = "nord"
+        await pilot.pause()
+    assert storage.load_ui_state()["theme"] == "nord"
+    async with app_with(tmp_path).run_test() as pilot:
+        await pilot.pause()
+        assert pilot.app.theme == "nord"
+
+
+async def test_palette_offers_ytkit_actions(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        titles = {command.title for command in app.get_system_commands(app.screen)}
+        assert {"Copy the yt-dlp command", "Clear finished jobs", "Profiles"} <= titles
+
+
+INFO = {"title": "Me at the zoo", "id": "jNQXAC9IVRw", "webpage_url": "https://youtu.be/jNQXAC9IVRw"}
+
+
+async def test_inspected_url_can_be_queued_from_the_inspector(tmp_path):
+    from ytkit.tui.modals import InfoScreen
+
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.query_one("#url-input", Input).value = "https://youtu.be/jNQXAC9IVRw"
+        app._show_info(INFO, "https://youtu.be/jNQXAC9IVRw", queueable=True)
+        await pilot.pause()
+        assert isinstance(app.screen, InfoScreen)
+        await pilot.press("a")
+        await pilot.pause()
+        assert [j.url for j in app.engine.jobs.values()] == ["https://youtu.be/jNQXAC9IVRw"]
+        assert app.query_one("#url-input", Input).value == ""
+
+
+async def test_inspecting_a_queued_job_offers_no_queue(tmp_path):
+    from ytkit.tui.modals import InfoScreen
+
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app._show_info(INFO, "https://youtu.be/jNQXAC9IVRw", queueable=False)
+        await pilot.pause()
+        assert not app.screen.query("#queue")
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, InfoScreen)
+        assert not app.engine.jobs
+
+
+@pytest.fixture
+def profiles(tmp_path, monkeypatch):
+    from ytkit import storage
+
+    monkeypatch.setattr(storage, "PROFILE_DIR", tmp_path / "profiles")
+    storage.save_profile("hifi", Config(audio_format="flac"))
+    return storage
+
+
+async def test_enter_on_a_listed_profile_loads_it(tmp_path, profiles):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.press("escape", "p")
+        await pilot.pause()
+        app.screen.query_one("#profile-list").focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.cfg.audio_format == "flac"
+
+
+async def test_deleting_a_profile_asks_first(tmp_path, profiles):
+    from ytkit.tui.modals import ConfirmScreen
+
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.press("escape", "p")
+        await pilot.pause()
+        app.screen.query_one("#profile-name", Input).value = "hifi"
+        await pilot.click("#delete")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.click("#no")
+        await pilot.pause()
+        assert profiles.list_profiles() == ["hifi"]
+        await pilot.click("#delete")
+        await pilot.pause()
+        await pilot.click("#yes")
+        await pilot.pause()
+        assert profiles.list_profiles() == []
+
+
+async def test_queue_and_settings_go_narrow_together(tmp_path):
+    from ytkit.tui.app import COMPACT_COLUMNS
+
+    for width in (100, 109, 110, 120):
+        async with app_with(tmp_path).run_test(size=(width, 30)) as pilot:
+            app = pilot.app
+            await pilot.pause()
+            app._fit_title_column()
+            assert app.screen.has_class("-narrow") == (app.columns == COMPACT_COLUMNS), width
+
+
+async def test_enter_in_the_name_box_asks_before_replacing_a_profile(tmp_path, profiles):
+    from ytkit.tui.modals import ConfirmScreen
+
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.press("escape", "p")
+        await pilot.pause()
+        assert app.screen.query_one("#profile-name", Input).value == "hifi"  # prefilled
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.click("#no")
+        await pilot.pause()
+        assert profiles.load_profile("hifi").audio_format == "flac"
+
+
+async def test_a_new_profile_name_saves_without_asking(tmp_path, profiles):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.press("escape", "p")
+        await pilot.pause()
+        app.screen.query_one("#profile-name", Input).value = "fresh"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "fresh" in profiles.list_profiles()
+
+
+async def test_clicking_a_profile_picks_it_without_loading(tmp_path, profiles):
+    from ytkit.tui.modals import ProfileScreen
+
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.press("escape", "p")
+        await pilot.pause()
+        await pilot.click("#p-0")
+        await pilot.pause()
+        assert isinstance(app.screen, ProfileScreen)
+        assert app.cfg.audio_format != "flac"
+
+
+async def test_inspect_prefers_the_pasted_url_over_the_selected_job(tmp_path, monkeypatch):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        probed = []
+        monkeypatch.setattr(app, "_probe", lambda url, queueable=False: probed.append((url, queueable)))
+        place(app, State.DONE, url="https://example.com/old")
+        app.query_one("#url-input", Input).value = "https://example.com/new"
+        app.action_inspect()
+        app.query_one("#url-input", Input).value = ""
+        app.action_inspect()
+        assert probed == [("https://example.com/new", True), ("https://example.com/old", False)]
+
+
+@pytest.mark.parametrize("raw", ['theme = ["nord"]', "[theme]\nname = 'nord'", "theme = 3"])
+async def test_a_malformed_theme_is_ignored(tmp_path, raw):
+    from ytkit import storage
+
+    storage.UI_PATH.write_text(raw)
+    async with app_with(tmp_path).run_test() as pilot:
+        await pilot.pause()
+        assert pilot.app.theme == "textual-dark"  # the default, untouched

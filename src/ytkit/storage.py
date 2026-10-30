@@ -9,7 +9,11 @@ from typing import Any
 
 import tomli_w
 
-from .config import CONFIG_PATH, PROFILE_DIR, Config, parse_bool
+from .config import CONFIG_DIR, CONFIG_PATH, PROFILE_DIR, Config, parse_bool
+
+# Interface preferences (the TUI theme), kept apart from the download config
+# so they never show up as a setting or a yt-dlp option.
+UI_PATH = CONFIG_DIR / "tui.toml"
 
 
 def _coerce(cfg_cls: type[Config], data: dict[str, Any]) -> dict[str, Any]:
@@ -80,6 +84,28 @@ def save_config(cfg: Config, path: Path | None = None, *, full: bool = False) ->
         "# Run `ytkit config --path` to locate this file.\n\n"
     )
     path.write_text(header + tomli_w.dumps(grouped), encoding="utf-8")
+    return path
+
+
+# --- interface state ---------------------------------------------------------
+
+
+def load_ui_state(path: Path | None = None) -> dict[str, Any]:
+    path = path or UI_PATH
+    try:
+        with path.open("rb") as fh:
+            return tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def save_ui_state(state: dict[str, Any], path: Path | None = None) -> Path:
+    path = path or UI_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Via a temporary file, so a crash mid-write can't leave half a file.
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(tomli_w.dumps(state), encoding="utf-8")
+    tmp.replace(path)
     return path
 
 

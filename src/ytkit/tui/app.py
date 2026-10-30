@@ -6,16 +6,18 @@ import queue
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TypeVar
 
 from rich.markup import escape
 from rich.text import Text
 from textual import on, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
+from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import (
     Button,
@@ -23,7 +25,6 @@ from textual.widgets import (
     Footer,
     Header,
     Input,
-    Label,
     RichLog,
     Select,
     Static,
@@ -34,6 +35,7 @@ from textual.widgets import (
 from textual.widgets._data_table import ColumnKey
 from textual.widgets.select import NoSelection
 
+from .. import storage
 from ..argv import build_command
 from ..config import Config
 from ..engine import TERMINAL, Engine, Event, Job, State
@@ -54,9 +56,11 @@ STATE_STYLE = {
     State.CANCELLED: ("cancelled", "bright_black"),
 }
 
+Columns = tuple[tuple[str, str, int], ...]
+
 # (key, label, width). Explicit keys are required: add_columns() would generate
 # its own, and update_cell() cannot address a column by its label.
-COLUMNS: tuple[tuple[str, str, int], ...] = (
+COLUMNS: Columns = (
     ("id", "#", 3),
     ("status", "Status", 11),
     ("title", "Title / URL", 34),  # resized to fill; see _fit_title_column
@@ -65,9 +69,29 @@ COLUMNS: tuple[tuple[str, str, int], ...] = (
     ("eta", "ETA", 5),
     ("size", "Size", 9),
 )
-FIXED_WIDTH = sum(w for key, _, w in COLUMNS if key != "title")
-CELL_PADDING = 2 * len(COLUMNS)  # DataTable pads one space either side
+# For narrow terminals: a bare percentage instead of the bar, and no size, so
+# the title keeps a readable width and nothing runs off the edge.
+COMPACT_COLUMNS: Columns = (
+    ("id", "#", 3),
+    ("status", "Status", 11),
+    ("title", "Title / URL", 30),
+    ("progress", "Done", 5),
+    ("speed", "Speed", 9),
+    ("eta", "ETA", 5),
+)
 MIN_TITLE, MAX_TITLE = 18, 70
+# Below this terminal width every screen goes narrow: the compact table, the
+# stacked settings rows, the full-screen inspector.
+NARROW_BELOW = 110
+
+
+def fixed_width(columns: Columns) -> int:
+    """Everything but the title, including DataTable's one-space cell padding."""
+    return sum(w for key, _, w in columns if key != "title") + 2 * len(columns)
+
+
+def width_of(columns: Columns, key: str) -> int:
+    return next(w for k, _, w in columns if k == key)
 
 
 def is_blank(value: object) -> bool:
@@ -80,7 +104,7 @@ def is_blank(value: object) -> bool:
     return isinstance(value, NoSelection)
 
 
-PROGRESS_WIDTH = next(w for key, _, w in COLUMNS if key == "progress")
+PROGRESS_WIDTH = width_of(COLUMNS, "progress")
 
 
 def short_reason(error: str) -> str:
@@ -93,15 +117,35 @@ def short_reason(error: str) -> str:
     return reason.split(". ")[0].rstrip(".") or "failed"
 
 
-def progress_cell(job: Job) -> Text:
-    """A bar while there is progress to show; for a failure, why it failed."""
+def progress_cell(job: Job, width: int = PROGRESS_WIDTH) -> Text:
+    """A bar while there is progress to show; for a failure, why it failed.
+
+    Too narrow for a bar, it is the percentage alone, and a failure's reason
+    moves to the title cell (see title_cell), where there is room to read it.
+    """
+    if job.state is State.FAILED and width < PROGRESS_WIDTH:
+        return Text("")
     if job.state is State.FAILED:
         text = Text(short_reason(job.error), style="red", no_wrap=True)
-        text.truncate(PROGRESS_WIDTH, overflow="ellipsis")
+        text.truncate(width, overflow="ellipsis")
         return text
     if job.state in (State.QUEUED, State.PROBING) or (job.state is State.CANCELLED and not job.percent):
         return Text("")
+    if width < PROGRESS_WIDTH:
+        # Floored: 99.6% rounded would read as finished while it is not.
+        return Text(f"{int(job.percent)}%".rjust(width), style="cyan" if job.percent < 100 else "")
     return bar(job.percent)
+
+
+def title_cell(job: Job, width: int, *, with_reason: bool) -> Text:
+    detail = f" [{job.detail}]" if job.detail and job.state in (State.RUNNING, State.POST) else ""
+    text = Text(no_wrap=True)
+    if with_reason and job.state is State.FAILED:
+        # Reason first: a long URL would otherwise push it out of the cell.
+        text.append(f"{short_reason(job.error)} · ", style="red")
+    text.append(job.label + detail)
+    text.truncate(width, overflow="ellipsis")
+    return text
 
 
 def is_setting(widget: Widget | None) -> bool:
@@ -136,16 +180,20 @@ class QueuePanel(Vertical):
                 allow_blank=True,
             )
             yield Button("Add", variant="primary", id="add-btn")
-        yield Static("", id="preset-hint", classes="panel-hint")
+        hint = Static("", id="preset-hint", classes="panel-hint")
+        hint.display = False  # until a preset has something to say
+        yield hint
         yield DataTable(id="job-table", cursor_type="row", zebra_stripes=True)
-        yield Label("Log", classes="pane-title")
-        yield RichLog(id="log", markup=True, wrap=True, max_lines=2000, highlight=False)
+        log = RichLog(id="log", markup=True, wrap=True, max_lines=2000, highlight=False)
+        log.border_title = "Log"
+        yield log
 
 
 class YtkitApp(App[None]):
     """Queue-driven downloader with a full settings surface."""
 
     CSS_PATH = "styles.tcss"
+    HORIZONTAL_BREAKPOINTS = [(0, "-narrow"), (NARROW_BELOW, "-wide")]
     TITLE = "ytkit"
     SUB_TITLE = "YouTube media & metadata"
 
@@ -183,16 +231,18 @@ class YtkitApp(App[None]):
         # a --preset or --profile at launch is a change the file doesn't have.
         self.saved_cfg = (saved or cfg).copy()
         self._warned: dict[str, object] = {}  # last bad value warned about, per field
+        self._remember_theme = False
         self.pending_urls = list(urls or [])
         self.events: queue.Queue[Event] = queue.Queue()
         self.engine = Engine(self.events.put, workers=max(1, cfg.parallel_jobs))
         self.rows: set[int] = set()
         self.title_width = MIN_TITLE
+        self.columns: Columns = ()
 
     # -- layout ---------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Header()
         with TabbedContent(id="tabs"):
             with TabPane("[dim]1[/] Queue", id="tab-queue"):
                 yield QueuePanel()
@@ -203,9 +253,10 @@ class YtkitApp(App[None]):
         yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
-        table = self.query_one("#job-table", DataTable)
-        for key, label, width in COLUMNS:
-            table.add_column(label, key=key, width=width)
+        theme = storage.load_ui_state().get("theme")
+        if isinstance(theme, str) and theme in self.available_themes:
+            self.theme = theme
+        self._remember_theme = True  # from here on a change is the user's
         self.set_interval(0.1, self._drain_events)
         self.set_interval(0.5, self._refresh_status)
         self.log_line(f"Output directory: [b]{escape(self.cfg.output_dir)}[/b]")
@@ -239,8 +290,14 @@ class YtkitApp(App[None]):
         table = self._widget("#job-table", DataTable)
         if table is None:
             return
-        spare = table.size.width - FIXED_WIDTH - CELL_PADDING
-        width = max(MIN_TITLE, min(MAX_TITLE, spare))
+        # The same breakpoint as the settings and modals, so the screens agree.
+        compact = 0 < self.size.width < NARROW_BELOW
+        columns = COMPACT_COLUMNS if compact else COLUMNS
+        width = max(MIN_TITLE, min(MAX_TITLE, table.size.width - fixed_width(columns)))
+        if columns != self.columns:
+            self.title_width = width  # before the rebuild, which renders every row
+            self._set_columns(table, columns)
+            return
         if width == self.title_width:
             return
         self.title_width = width
@@ -252,6 +309,41 @@ class YtkitApp(App[None]):
             if job.id in self.rows:
                 self._render_row(job)
         table.refresh()
+
+    def watch_theme(self, theme: str) -> None:
+        if self._remember_theme:
+            try:
+                storage.save_ui_state({**storage.load_ui_state(), "theme": theme})
+            except OSError as exc:
+                self.notify(f"Could not remember the theme: {exc}", severity="warning")
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        """ytkit's own actions in the command palette (ctrl+p), after Textual's."""
+        yield from super().get_system_commands(screen)
+        for title, help_text, action in (
+            ("Add a URL", "Focus the URL box", self.action_focus_url),
+            ("Copy the yt-dlp command", "For the current settings", self.action_copy_command),
+            ("Open the output folder", "In the system file manager", self.action_open_output),
+            ("Profiles", "Save, load or delete a named profile", self.action_profiles),
+            ("Save settings", "Write them to the config file", self.action_save_config),
+            ("Filter settings", "Search every setting by name or help", self.action_focus_filter),
+            ("Clear finished jobs", "Remove done, failed and cancelled rows", self.action_clear_finished),
+            ("Clear the log", "Empty the log panel", self.action_clear_log),
+        ):
+            yield SystemCommand(title, help_text, action)
+
+    def _set_columns(self, table: DataTable, columns: Columns) -> None:
+        """Rebuild the table for another layout, keeping the selected job."""
+        selected = self.selected_job()
+        table.clear(columns=True)
+        self.rows.clear()
+        self.columns = columns
+        for key, label, width in columns:
+            table.add_column(label, key=key, width=width)
+        for job in self.engine.jobs.values():
+            self._render_row(job)
+        if selected is not None and selected.id in self.rows:
+            table.move_cursor(row=table.get_row_index(str(selected.id)))
 
     # -- helpers --------------------------------------------------------------
 
@@ -357,24 +449,24 @@ class YtkitApp(App[None]):
     def _render_row(self, job: Job) -> None:
         table = self._widget("#job-table", DataTable)
         # A removed job can still have events in flight; they must not revive its row.
-        if table is None or job.id not in self.engine.jobs:
+        if table is None or job.id not in self.engine.jobs or not self.columns:
             return
         label, style = STATE_STYLE[job.state]
-        detail = f" [{job.detail}]" if job.detail and job.state in (State.RUNNING, State.POST) else ""
-        cells = (
-            str(job.id),
-            Text(label, style=style),
-            Text((job.label + detail)[: self.title_width], no_wrap=True),
-            progress_cell(job),
-            job.speed,
-            job.eta,
-            job.size,
-        )
+        progress_width = width_of(self.columns, "progress")
+        cells = {
+            "id": str(job.id),
+            "status": Text(label, style=style),
+            "title": title_cell(job, self.title_width, with_reason=progress_width < PROGRESS_WIDTH),
+            "progress": progress_cell(job, progress_width),
+            "speed": job.speed,
+            "eta": job.eta,
+            "size": job.size,
+        }
         if job.id in self.rows:
-            for (key, _, _), value in zip(COLUMNS, cells, strict=True):
-                table.update_cell(str(job.id), key, value, update_width=False)
+            for key, _, _ in self.columns:
+                table.update_cell(str(job.id), key, cells[key], update_width=False)
         else:
-            table.add_row(*cells, key=str(job.id))
+            table.add_row(*(cells[key] for key, _, _ in self.columns), key=str(job.id))
             self.rows.add(job.id)
 
     # -- queue interactions ---------------------------------------------------
@@ -398,7 +490,9 @@ class YtkitApp(App[None]):
         panel = self.query_one("#settings-panel", SettingsPanel)
         panel.cfg = self.cfg
         panel.refresh_values()
-        self.query_one("#preset-hint", Static).update(f"[b]{preset.label}:[/b] {preset.description}")
+        hint = self.query_one("#preset-hint", Static)
+        hint.update(f"[b]{preset.label}:[/b] {preset.description}")
+        hint.display = True
         self.log_line(f"applied preset [b]{preset.label}[/b]")
         self.refresh_command()
         self._refresh_unsaved()
@@ -597,16 +691,22 @@ class YtkitApp(App[None]):
         self.notify("Copied the yt-dlp command")
 
     def action_inspect(self) -> None:
-        job = self.selected_job()
-        url = job.url if job else self.query_one("#url-input", Input).value.strip()
+        """Inspect the pasted URL if there is one, else the selected job.
+
+        The pasted URL wins: the table always has a selected row once it has
+        any, so preferring the job would make a pasted URL uninspectable.
+        """
+        pasted = self.query_one("#url-input", Input).value.strip().split()
+        job = None if pasted else self.selected_job()
+        url = pasted[0] if pasted else (job.url if job else "")
         if not url:
             self.notify("Paste a URL or select a job to inspect.", severity="warning")
             return
         self.log_line(f"probing [b]{escape(url)}[/b]…")
-        self._probe(url)
+        self._probe(url, queueable=job is None)
 
     @work(thread=True, exclusive=True, group="probe")
-    def _probe(self, url: str) -> None:
+    def _probe(self, url: str, queueable: bool = False) -> None:
         from ..engine import probe
 
         try:
@@ -614,7 +714,19 @@ class YtkitApp(App[None]):
         except Exception as exc:  # noqa: BLE001 - report any extractor failure
             self.call_from_thread(self.notify, f"Probe failed: {exc}", severity="error")
             return
-        self.call_from_thread(self.push_screen, InfoScreen(info))
+        self.call_from_thread(self._show_info, info, url, queueable)
+
+    def _show_info(self, info: dict, url: str, queueable: bool) -> None:
+        """The inspector; queueing from it is the same as pressing Add."""
+
+        def queued(yes: bool | None) -> None:
+            if yes:
+                self.add_url(url)
+                field = self.query_one("#url-input", Input)
+                if field.value.strip() == url:
+                    field.value = ""
+
+        self.push_screen(InfoScreen(info, queueable=queueable), queued)
 
     def action_profiles(self) -> None:
         self._commit_focused()
