@@ -20,7 +20,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). `ffmpeg` is needed
 for merging, audio extraction and embedding.
 
 ```bash
-git clone <your-remote> ytkit && cd ytkit
+git clone https://github.com/MS-32154/ytkit && cd ytkit
 uv sync
 uv run ytkit          # launches the TUI
 ```

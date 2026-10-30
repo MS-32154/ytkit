@@ -19,13 +19,13 @@ classifiers = [
 ]
 dependencies = [
     "anyascii>=0.3.3",
-    "platformdirs>=4.2",
-    "questionary>=2.0",
-    "rich>=13.7",
-    "textual>=1.0",
-    "tomli-w>=1.0",
-    "typer>=0.12",
-    "yt-dlp>=2025.1.1",
+    "platformdirs>=4.14",
+    "questionary>=2.1",
+    "rich>=15.0",
+    "textual>=8.2",
+    "tomli-w>=1.2",
+    "typer>=0.27.3",
+    "yt-dlp>=2026.10.26",
 ]
 
 [project.urls]
@@ -37,9 +37,9 @@ ytkit = "ytkit.cli:entrypoint"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-    "ruff>=0.6",
+    "pytest>=9.2",
+    "pytest-asyncio>=1.4",
+    "ruff>=0.17",
 ]
 
 [build-system]
