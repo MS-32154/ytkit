@@ -184,3 +184,11 @@ def test_toml_native_booleans_still_work(tmp_path):
     cfg = load_config(path)
     assert cfg.subtitles is False
     assert cfg.embed_subs is True
+
+
+def test_parse_value_checks_without_setting():
+    cfg = Config()
+    assert Config.parse_value("max_fps", "30") == (True, 30)
+    assert Config.parse_value("max_fps", "-")[0] is False
+    assert Config.parse_value("sub_langs", "en, fr") == (True, ["en", "fr"])
+    assert cfg == Config()

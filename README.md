@@ -61,15 +61,26 @@ equivalent `yt-dlp` invocation plus every setting you've changed from default.
 | `esc` | Leave a text box, so the one-letter keys work again |
 | `a` | Focus the URL box |
 | `i` | Inspect the selected job / pasted URL (metadata, no download) |
-| `x` | Cancel the selected job |
+| `x` | Cancel the selected job, or remove it from the list once finished |
+| `X` | Remove every finished job from the list |
 | `r` | Retry a failed or cancelled job |
-| `o` | Open the output folder |
+| `o` | Open the selected job's folder from the job table, else the output folder |
 | `c` | Copy the equivalent yt-dlp command — from the job table, that job's own |
 | `p` | Save / load / delete a named profile |
+| `/` | Filter the settings |
 | `ctrl+s` | Save the current settings as your config |
 | `ctrl+l` | Clear the log |
 | `ctrl+p` | Textual's command palette |
 | `ctrl+q` | Quit (confirms if downloads are running) |
+
+The footer only offers what applies to the selected job. A failed job's row
+says why it failed, and a URL that is already queued or downloading is not
+queued twice.
+
+Text settings apply when you press enter or leave the field, never
+half-typed; a value that can't be used is outlined in red and left out. A
+`●` marks every setting changed from its default, and `Settings*` means
+there are changes `ctrl+s` hasn't saved.
 
 Path settings complete as you type, like a shell: `tab` or `→` accepts the
 suggestion, and the output and temporary directory fields only offer folders.

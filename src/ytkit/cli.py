@@ -100,7 +100,7 @@ def _launch_tui(
 ) -> None:
     from .tui.app import run
 
-    run(_base_config(config_file, profile, preset), list(urls or []))
+    run(_base_config(config_file, profile, preset), list(urls or []), saved=load_config())
 
 
 @app.command()

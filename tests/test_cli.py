@@ -205,22 +205,25 @@ def test_bare_invocation_launches_the_tui(monkeypatch):
     import ytkit.tui.app as tui_app
 
     captured = {}
-    monkeypatch.setattr(tui_app, "run", lambda cfg, urls: captured.update(cfg=cfg, urls=urls))
+    monkeypatch.setattr(tui_app, "run", lambda cfg, urls, saved: captured.update(cfg=cfg, urls=urls, saved=saved))
     result = run()
     assert result.exit_code == 0, result.output
     assert isinstance(captured["cfg"], Config)
     assert captured["urls"] == []
 
 
-def test_tui_subcommand_passes_urls_and_preset(monkeypatch):
+def test_tui_subcommand_passes_urls_and_preset(monkeypatch, tmp_path):
+    monkeypatch.setattr("ytkit.storage.CONFIG_PATH", tmp_path / "config.toml")
     import ytkit.tui.app as tui_app
 
     captured = {}
-    monkeypatch.setattr(tui_app, "run", lambda cfg, urls: captured.update(cfg=cfg, urls=urls))
+    monkeypatch.setattr(tui_app, "run", lambda cfg, urls, saved: captured.update(cfg=cfg, urls=urls, saved=saved))
     result = run("tui", URL, "--preset", "audio")
     assert result.exit_code == 0, result.output
     assert captured["urls"] == [URL]
     assert captured["cfg"].mode == "audio"
+    # The unsaved mark compares against the file, which the preset hasn't touched.
+    assert captured["saved"].mode != "audio"
 
 
 def test_tui_subcommand_reports_a_missing_profile(monkeypatch, tmp_path):

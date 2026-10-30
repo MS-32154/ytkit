@@ -495,26 +495,33 @@ class Config:
         Returns False and leaves the value untouched if the input doesn't
         parse, so a half-typed number in the settings form is harmless.
         """
-        f = {x.name: x for x in fields(self)}[name]
+        ok, value = Config.parse_value(name, raw)
+        if ok:
+            setattr(self, name, value)
+        return ok
+
+    @classmethod
+    def parse_value(cls, name: str, raw: str | bool) -> tuple[bool, Any]:
+        """The parse step of set_from_string alone: (accepted, value)."""
+        f = {x.name: x for x in fields(cls)}[name]
         kind = f.metadata["kind"]
         try:
             if kind == "bool":
                 parsed = parse_bool(raw)
                 if parsed is None:
-                    return False
+                    return False, None
                 value: Any = parsed
             elif kind == "int":
                 value = int(str(raw).strip()) if str(raw).strip() else 0
             elif kind == "list":
                 value = [p.strip() for p in str(raw).split(",") if p.strip()]
-            elif isinstance(Config.default_for(name), float):
+            elif isinstance(cls.default_for(name), float):
                 value = float(str(raw).strip()) if str(raw).strip() else 0.0
             else:
                 value = str(raw)
         except (TypeError, ValueError):
-            return False
-        setattr(self, name, value)
-        return True
+            return False, None
+        return True, value
 
     def display(self, name: str) -> str:
         v = getattr(self, name)

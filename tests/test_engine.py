@@ -465,3 +465,14 @@ def test_entries_are_not_post_processed_twice(tmp_path):
     engine.shutdown(wait=True)
 
     assert job.items_done == 1
+
+
+def test_forget_drops_finished_jobs_only():
+    engine = Engine(lambda event: None)
+    done = Job(url="https://example.com/a", config=Config(), state=State.DONE)
+    running = Job(url="https://example.com/b", config=Config(), state=State.RUNNING)
+    engine.jobs.update({done.id: done, running.id: running})
+    assert engine.forget(done.id)
+    assert not engine.forget(running.id)
+    assert not engine.forget(9999)
+    assert list(engine.jobs) == [running.id]

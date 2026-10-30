@@ -233,6 +233,16 @@ class Engine:
         if future is not None and future.cancel():  # never started
             self._finish(job, State.CANCELLED)
 
+    def forget(self, job_id: int) -> bool:
+        """Drop a finished job from the record. Running jobs are kept."""
+        with self._lock:
+            job = self.jobs.get(job_id)
+            if job is None or job.state not in TERMINAL:
+                return False
+            del self.jobs[job_id]
+            self._futures.pop(job_id, None)
+        return True
+
     def cancel_all(self) -> None:
         for job_id in list(self.jobs):
             self.cancel(job_id)

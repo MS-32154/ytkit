@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,7 +36,7 @@ from textual.widgets.select import NoSelection
 
 from ..argv import build_command
 from ..config import Config
-from ..engine import Engine, Event, Job, State
+from ..engine import TERMINAL, Engine, Event, Job, State
 from ..presets import BY_KEY, PRESETS
 from ..storage import delete_profile, load_profile, save_config, save_profile
 from .modals import ConfirmScreen, InfoScreen, ProfileScreen
@@ -79,6 +80,34 @@ def is_blank(value: object) -> bool:
     return isinstance(value, NoSelection)
 
 
+PROGRESS_WIDTH = next(w for key, _, w in COLUMNS if key == "progress")
+
+
+def short_reason(error: str) -> str:
+    """The gist of a yt-dlp error, for a table cell.
+
+    'ERROR: [youtube] abc123: Private video. Sign in if...' -> 'Private video'
+    """
+    reason = re.sub(r"^ERROR:\s*", "", error.strip())
+    reason = re.sub(r"^\[[^\]]+\]\s*(?:[\w-]+:\s+)?", "", reason)
+    return reason.split(". ")[0].rstrip(".") or "failed"
+
+
+def progress_cell(job: Job) -> Text:
+    """A bar while there is progress to show; for a failure, why it failed."""
+    if job.state is State.FAILED:
+        text = Text(short_reason(job.error), style="red", no_wrap=True)
+        text.truncate(PROGRESS_WIDTH, overflow="ellipsis")
+        return text
+    if job.state in (State.QUEUED, State.PROBING) or (job.state is State.CANCELLED and not job.percent):
+        return Text("")
+    return bar(job.percent)
+
+
+def is_setting(widget: Widget | None) -> bool:
+    return widget is not None and (widget.id or "").startswith("f-")
+
+
 def bar(percent: float, width: int = 12) -> Text:
     filled = int(round(percent / 100 * width))
     text = Text()
@@ -86,6 +115,9 @@ def bar(percent: float, width: int = 12) -> Text:
     text.append("░" * (width - filled), style="bright_black")
     text.append(f" {percent:5.1f}%")
     return text
+
+
+SETTINGS_LABEL = "[dim]2[/] Settings"
 
 
 class QueuePanel(Vertical):
@@ -121,7 +153,10 @@ class YtkitApp(App[None]):
     BINDINGS = [
         ("a", "focus_url", "Add"),
         ("i", "inspect", "Inspect"),
+        # One key, two jobs: check_action enables whichever fits the selected row.
         ("x", "cancel_job", "Cancel"),
+        ("x", "remove_job", "Remove"),
+        Binding("X", "clear_finished", "Clear finished", show=False),
         ("r", "retry_job", "Retry"),
         ("o", "open_output", "Folder"),
         ("c", "copy_command", "Copy"),
@@ -130,6 +165,7 @@ class YtkitApp(App[None]):
         Binding("1", "show_tab('tab-queue')", "Queue", show=False),
         Binding("2", "show_tab('tab-settings')", "Settings", show=False),
         Binding("3", "show_tab('tab-command')", "Command", show=False),
+        Binding("slash", "focus_filter", "Filter settings", show=False),
         ("escape", "leave_input", "Shortcuts"),
         ("ctrl+s", "save_config", "Save"),
         Binding("ctrl+l", "clear_log", "Clear log", show=False),
@@ -138,9 +174,15 @@ class YtkitApp(App[None]):
 
     active_jobs: reactive[int] = reactive(0)
 
-    def __init__(self, cfg: Config, urls: list[str] | None = None) -> None:
+    def __init__(
+        self, cfg: Config, urls: list[str] | None = None, *, saved: Config | None = None
+    ) -> None:
         super().__init__()
         self.cfg = cfg
+        # What ctrl+s would overwrite, for the unsaved mark. Not `cfg` itself:
+        # a --preset or --profile at launch is a change the file doesn't have.
+        self.saved_cfg = (saved or cfg).copy()
+        self._warned: dict[str, object] = {}  # last bad value warned about, per field
         self.pending_urls = list(urls or [])
         self.events: queue.Queue[Event] = queue.Queue()
         self.engine = Engine(self.events.put, workers=max(1, cfg.parallel_jobs))
@@ -154,7 +196,7 @@ class YtkitApp(App[None]):
         with TabbedContent(id="tabs"):
             with TabPane("[dim]1[/] Queue", id="tab-queue"):
                 yield QueuePanel()
-            with TabPane("[dim]2[/] Settings", id="tab-settings"):
+            with TabPane(SETTINGS_LABEL, id="tab-settings"):
                 yield SettingsPanel(self.cfg, id="settings-panel")
             with TabPane("[dim]3[/] Command", id="tab-command"), VerticalScroll(id="command-scroll"):
                 yield Static("", id="command-view", classes="command-view")
@@ -168,6 +210,7 @@ class YtkitApp(App[None]):
         self.set_interval(0.5, self._refresh_status)
         self.log_line(f"Output directory: [b]{escape(self.cfg.output_dir)}[/b]")
         self.refresh_command()
+        self._refresh_unsaved()
         self._fit_title_column()
         for url in self.pending_urls:
             self.add_url(url)
@@ -254,6 +297,18 @@ class YtkitApp(App[None]):
         url = url.strip()
         if not url:
             return
+        # The same URL under other settings (video now, audio after) is a new job.
+        twin = next(
+            (
+                j
+                for j in self.engine.jobs.values()
+                if j.url == url and j.config == self.cfg and j.state not in TERMINAL
+            ),
+            None,
+        )
+        if twin is not None:
+            self.notify(f"Already in the queue as job {twin.id}", severity="warning")
+            return
         job = self.engine.submit(Job(url=url, config=self.cfg.copy()))
         self.log_line(f"queued [b]{escape(url)}[/b] (job {job.id})")
 
@@ -279,6 +334,7 @@ class YtkitApp(App[None]):
 
     def _on_state(self, event: Event) -> None:
         job = event.job
+        self.refresh_bindings()  # x and r follow the selected job's state
         if job.state is State.DONE:
             count = f" ({job.items_done} items)" if job.items_done > 1 else ""
             self.log_line(f"[green]✓[/green] job {job.id} finished{count} in {job.elapsed:.0f}s")
@@ -300,7 +356,8 @@ class YtkitApp(App[None]):
 
     def _render_row(self, job: Job) -> None:
         table = self._widget("#job-table", DataTable)
-        if table is None:
+        # A removed job can still have events in flight; they must not revive its row.
+        if table is None or job.id not in self.engine.jobs:
             return
         label, style = STATE_STYLE[job.state]
         detail = f" [{job.detail}]" if job.detail and job.state in (State.RUNNING, State.POST) else ""
@@ -308,7 +365,7 @@ class YtkitApp(App[None]):
             str(job.id),
             Text(label, style=style),
             Text((job.label + detail)[: self.title_width], no_wrap=True),
-            bar(job.percent),
+            progress_cell(job),
             job.speed,
             job.eta,
             job.size,
@@ -344,22 +401,66 @@ class YtkitApp(App[None]):
         self.query_one("#preset-hint", Static).update(f"[b]{preset.label}:[/b] {preset.description}")
         self.log_line(f"applied preset [b]{preset.label}[/b]")
         self.refresh_command()
+        self._refresh_unsaved()
 
     # -- settings interactions ------------------------------------------------
 
     @on(Switch.Changed)
     @on(Select.Changed)
+    def _choice_changed(self, event: Switch.Changed | Select.Changed) -> None:
+        if is_setting(event.control) and not is_blank(event.value):
+            self._apply_setting(event.control, event.value)
+
     @on(Input.Changed)
-    def _setting_changed(self, event) -> None:
-        widget_id = event.control.id if event.control else None
-        if not widget_id or not widget_id.startswith("f-"):
+    def _setting_edited(self, event: Input.Changed) -> None:
+        # Checked as you type, applied only on commit: a half-typed path or
+        # number must never become the setting a download picks up.
+        panel = self._widget("#settings-panel", SettingsPanel)
+        if is_setting(event.input) and panel is not None:
+            event.input.set_class(not panel.accepts(event.input.id, event.value), "-invalid")
+
+    @on(Input.Submitted)
+    @on(Input.Blurred)
+    def _setting_committed(self, event: Input.Submitted | Input.Blurred) -> None:
+        if is_setting(event.input):
+            self._apply_setting(event.input, event.value)
+
+    @on(DataTable.RowHighlighted, "#job-table")
+    @on(TabbedContent.TabActivated)
+    def _context_moved(self) -> None:
+        self.refresh_bindings()  # x and r depend on the tab and the selected job
+
+    def _commit_focused(self) -> None:
+        """Apply a text field still being edited, before its value is used."""
+        if isinstance(self.focused, Input) and is_setting(self.focused):
+            self._apply_setting(self.focused, self.focused.value)
+
+    def _apply_setting(self, widget: Widget, value: object) -> None:
+        panel = self._widget("#settings-panel", SettingsPanel)
+        if panel is None:
             return
-        value = event.value
-        if is_blank(value):
+        name = panel.apply_change(widget.id, value)
+        if name is None:
+            if isinstance(widget, Input):
+                widget.add_class("-invalid")
+                # Enter, then leaving the field, then ctrl+s all commit: say it once.
+                if self._warned.get(widget.id or "") != value:
+                    self._warned[widget.id or ""] = value
+                    self.notify(
+                        f"{panel.label_for(widget.id)}: {value!r} isn't valid; the setting is unchanged.",
+                        severity="warning",
+                    )
             return
-        panel = self.query_one("#settings-panel", SettingsPanel)
-        if panel.apply_change(widget_id, value):
-            self.refresh_command()
+        self._warned.pop(widget.id or "", None)
+        widget.remove_class("-invalid")
+        self.refresh_command()
+        self._refresh_unsaved()
+
+    def _refresh_unsaved(self) -> None:
+        tabs = self._widget("#tabs", TabbedContent)
+        if tabs is not None:
+            unsaved = self.cfg != self.saved_cfg
+            tabs.get_tab("tab-settings").label = SETTINGS_LABEL + ("[b $warning]*[/]" if unsaved else "")
 
     # -- actions --------------------------------------------------------------
 
@@ -375,7 +476,7 @@ class YtkitApp(App[None]):
         self.query_one("#tabs", TabbedContent).active = tab
         target = {
             "tab-queue": "#job-table",
-            "tab-settings": "#settings-panel",
+            "tab-settings": "#settings-scroll",
             "tab-command": "#command-scroll",
         }[tab]
         self.query_one(target).focus()
@@ -388,6 +489,17 @@ class YtkitApp(App[None]):
         # Offered only while typing, so esc still reaches anything else that wants it.
         if action == "leave_input":
             return isinstance(self.focused, Input)
+        if action in ("cancel_job", "remove_job", "retry_job"):
+            # Only where the job is in view: these act on a row the user must see.
+            tabs = self._widget("#tabs", TabbedContent)
+            job = self.selected_job()
+            if job is None or tabs is None or tabs.active != "tab-queue":
+                return False
+            if action == "cancel_job":
+                return job.state not in TERMINAL
+            if action == "remove_job":
+                return job.state in TERMINAL
+            return job.state in (State.FAILED, State.CANCELLED)
         return True
 
     def action_leave_input(self) -> None:
@@ -405,6 +517,30 @@ class YtkitApp(App[None]):
         self.engine.cancel(job.id)
         self.log_line(f"cancelling job {job.id}…", "warning")
 
+    def action_remove_job(self) -> None:
+        job = self.selected_job()
+        if job is not None and self._forget(job.id):
+            self.log_line(f"removed job {job.id} from the list")
+
+    def action_clear_finished(self) -> None:
+        finished = [j.id for j in list(self.engine.jobs.values()) if j.state in TERMINAL]
+        removed = sum(self._forget(job_id) for job_id in finished)
+        self.notify(f"Cleared {removed} finished job(s)" if removed else "Nothing finished to clear")
+
+    def _forget(self, job_id: int) -> bool:
+        if not self.engine.forget(job_id):
+            return False
+        table = self.query_one("#job-table", DataTable)
+        if job_id in self.rows:
+            table.remove_row(str(job_id))
+            self.rows.discard(job_id)
+        self.refresh_bindings()
+        return True
+
+    def action_focus_filter(self) -> None:
+        self.action_show_tab("tab-settings")
+        self.query_one("#settings-filter", Input).focus()
+
     def action_retry_job(self) -> None:
         job = self.selected_job()
         if job is None or job.state not in (State.FAILED, State.CANCELLED):
@@ -416,13 +552,25 @@ class YtkitApp(App[None]):
         self.query_one("#log", RichLog).clear()
 
     def action_save_config(self) -> None:
+        self._commit_focused()
         path = save_config(self.cfg)
+        self.saved_cfg = self.cfg.copy()
+        self._refresh_unsaved()
         self.notify(f"Saved {path}")
         self.log_line(f"config saved to [b]{escape(str(path))}[/b]")
 
     def action_open_output(self) -> None:
-        path = Path(self.cfg.output_dir).expanduser()
+        """Open the selected job's folder from the job table, else the output root."""
+        table = self._widget("#job-table", DataTable)
+        job = self.selected_job() if table is not None and table.has_focus else None
+        if job is not None and job.files:
+            self._open(job.files[0].parent)
+            return
+        path = Path((job.config if job else self.cfg).output_dir).expanduser()
         path.mkdir(parents=True, exist_ok=True)
+        self._open(path)
+
+    def _open(self, path: Path) -> None:
         opener = {"darwin": "open", "win32": "explorer"}.get(sys.platform, "xdg-open")
         try:
             subprocess.Popen([opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -469,6 +617,7 @@ class YtkitApp(App[None]):
         self.call_from_thread(self.push_screen, InfoScreen(info))
 
     def action_profiles(self) -> None:
+        self._commit_focused()
         self.push_screen(ProfileScreen(), self._handle_profile)
 
     def _handle_profile(self, result: tuple[str, str] | None) -> None:
@@ -485,6 +634,7 @@ class YtkitApp(App[None]):
                 panel.cfg = self.cfg
                 panel.refresh_values()
                 self.refresh_command()
+                self._refresh_unsaved()
                 self.notify(f"Loaded profile '{name}'")
             elif action == "delete":
                 self.notify(
@@ -506,5 +656,5 @@ class YtkitApp(App[None]):
         self.exit()
 
 
-def run(cfg: Config, urls: list[str] | None = None) -> None:
-    YtkitApp(cfg, urls).run()
+def run(cfg: Config, urls: list[str] | None = None, *, saved: Config | None = None) -> None:
+    YtkitApp(cfg, urls, saved=saved).run()

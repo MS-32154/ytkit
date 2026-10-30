@@ -53,7 +53,12 @@ Screen {
 /* -- settings ------------------------------------------------------------- */
 
 SettingsPanel {
+    height: 1fr;
     padding: 1 2;
+}
+
+#settings-scroll {
+    height: 1fr;
 }
 
 .section {
@@ -84,6 +89,15 @@ Input.field-input {
 
 Select.field-input {
     width: 44;
+}
+
+.field-row.-changed .field-label {
+    color: $accent;
+    text-style: bold;
+}
+
+#settings-filter {
+    margin-bottom: 1;
 }
 
 .field-help {

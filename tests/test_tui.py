@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import pytest
 from textual.binding import Binding
-from textual.widgets import DataTable, Input, RichLog, Select, Static, Switch, TabbedContent
+from textual.widgets import DataTable, Input, Label, RichLog, Select, Static, Switch, TabbedContent
 
 from ytkit.config import Config
+from ytkit.engine import Event, Job, State
 from ytkit.tui.app import YtkitApp
 from ytkit.tui.settings import SettingsPanel, widget_id
 
@@ -45,11 +46,16 @@ async def test_toggling_a_switch_updates_the_config_and_command(tmp_path):
         assert "--embed-subs" in str(app.query_one("#command-view", Static).content)
 
 
-async def test_editing_an_input_updates_the_config(tmp_path):
+async def test_editing_an_input_updates_the_config_on_enter(tmp_path):
     async with app_with(tmp_path).run_test() as pilot:
         app = pilot.app
         field = app.query_one(f"#{widget_id('sub_langs')}", Input)
+        app.action_show_tab("tab-settings")
+        field.focus()
         field.value = "en,fr,de"
+        await pilot.pause()
+        assert app.cfg.sub_langs == ["en"]  # not while typing
+        await pilot.press("enter")
         await pilot.pause()
         assert app.cfg.sub_langs == ["en", "fr", "de"]
 
@@ -400,3 +406,294 @@ async def test_path_settings_complete(tmp_path):
             assert isinstance(field, PathInput), name
         assert panel.query_one(f"#{widget_id('output_dir')}", PathInput).suggester.dirs_only
         assert not panel.query_one(f"#{widget_id('cookies_file')}", PathInput).suggester.dirs_only
+
+
+# -- settings: commit, validation, markers, filter -------------------------------
+
+
+async def test_half_typed_value_never_reaches_the_config(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.action_show_tab("tab-settings")
+        field = app.query_one(f"#{widget_id('output_dir')}", Input)
+        field.focus()
+        field.value = "~/Do"
+        await pilot.pause()
+        assert app.cfg.output_dir == str(tmp_path)
+
+
+async def test_leaving_a_field_commits_it(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.action_show_tab("tab-settings")
+        field = app.query_one(f"#{widget_id('max_fps')}", Input)
+        field.focus()
+        field.value = "30"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.cfg.max_fps == 30
+
+
+async def test_invalid_value_is_flagged_and_not_applied(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.action_show_tab("tab-settings")
+        field = app.query_one(f"#{widget_id('max_fps')}", Input)
+        field.focus()
+        field.value = "-"
+        await pilot.pause()
+        assert field.has_class("-invalid")  # flagged while typing
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.cfg.max_fps == 0
+        assert any("Max FPS" in str(n.message) for n in app._notifications)
+        field.value = "24"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not field.has_class("-invalid")
+
+
+async def test_changed_settings_are_marked(tmp_path):
+    from ytkit.tui.settings import CHANGED_MARK, FieldRow
+
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        select = app.query_one(f"#{widget_id('container')}", Select)
+        row = select.parent
+        assert isinstance(row, FieldRow)
+        assert not row.has_class("-changed")
+        select.value = "mkv"
+        await pilot.pause()
+        assert row.has_class("-changed")
+        assert str(row.query_one(".field-label", Label).content).startswith(CHANGED_MARK)
+        select.value = Config.default_for("container")
+        await pilot.pause()
+        assert not row.has_class("-changed")
+
+
+async def test_unsaved_changes_show_on_the_tab_until_saved(tmp_path, monkeypatch):
+    import ytkit.tui.app as tui_app
+
+    monkeypatch.setattr(tui_app, "save_config", lambda cfg: tmp_path / "config.toml")
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        tab = app.query_one("#tabs", TabbedContent).get_tab("tab-settings")
+        assert "*" not in str(tab.label)
+        app.query_one(f"#{widget_id('container')}", Select).value = "mkv"
+        await pilot.pause()
+        assert "*" in str(tab.label)
+        app.action_save_config()
+        await pilot.pause()
+        assert "*" not in str(tab.label)
+
+
+async def test_saving_commits_the_field_being_edited(tmp_path, monkeypatch):
+    import ytkit.tui.app as tui_app
+
+    saved = []
+    monkeypatch.setattr(tui_app, "save_config", lambda cfg: saved.append(cfg.max_fps) or tmp_path)
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.action_show_tab("tab-settings")
+        field = app.query_one(f"#{widget_id('max_fps')}", Input)
+        field.focus()
+        field.value = "60"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert saved == [60]
+
+
+async def test_filter_narrows_the_settings_and_restores_sections(tmp_path):
+    from textual.widgets import Collapsible
+
+    from ytkit.tui.settings import FieldRow
+
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        panel = app.query_one("#settings-panel", SettingsPanel)
+        before = {s: s.collapsed for s in panel.query(Collapsible)}
+        panel.filter("cookie")
+        await pilot.pause()
+        shown = [r.field.name for r in panel.query(FieldRow) if r.display]
+        assert shown and all("cookie" in name for name in shown)
+        assert all(not s.collapsed for s in panel.query(Collapsible) if s.display)
+        panel.filter("")
+        await pilot.pause()
+        assert all(r.display for r in panel.query(FieldRow))
+        assert {s: s.collapsed for s in panel.query(Collapsible)} == before
+
+
+async def test_slash_jumps_to_the_filter(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        await pilot.press("escape", "slash")
+        await pilot.pause(0.2)
+        assert app.query_one("#tabs", TabbedContent).active == "tab-settings"
+        assert app.focused is app.query_one("#settings-filter", Input)
+
+
+# -- queue: duplicates, removal, failures, folders --------------------------------
+
+
+def place(app: YtkitApp, state: State, **fields) -> Job:
+    """Put a job straight into a given state, without running it."""
+    job = Job(url=fields.pop("url", f"https://example.com/{state}"), config=app.cfg.copy(), state=state, **fields)
+    app.engine.jobs[job.id] = job
+    app._render_row(job)
+    return job
+
+
+async def test_a_url_already_in_progress_is_not_queued_twice(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        running = place(app, State.RUNNING, url="https://example.com/same")
+        app.add_url("https://example.com/same")
+        assert len(app.engine.jobs) == 1
+        running.state = State.DONE
+        app.add_url("https://example.com/same")  # finished: fetching again is a choice
+        assert len(app.engine.jobs) == 2
+
+
+async def test_x_cancels_running_and_removes_finished(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        table = app.query_one("#job-table", DataTable)
+        done = place(app, State.DONE)
+        running = place(app, State.QUEUED)
+        await pilot.pause()
+        table.focus()
+        table.move_cursor(row=table.get_row_index(str(done.id)))
+        await pilot.press("x")
+        await pilot.pause()
+        assert done.id not in app.engine.jobs
+        assert table.row_count == 1
+        table.move_cursor(row=table.get_row_index(str(running.id)))
+        await pilot.press("x")
+        await pilot.pause()
+        assert running.id in app.engine.jobs  # cancelled, not removed
+
+
+async def test_footer_offers_the_action_that_fits_the_row(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        table = app.query_one("#job-table", DataTable)
+        place(app, State.FAILED, error="ERROR: boom")
+        await pilot.pause()
+        table.focus()
+        app.refresh_bindings()
+        await pilot.pause()
+        shown = {b.binding.description for b in app.active_bindings.values() if b.enabled}
+        assert {"Remove", "Retry"} <= shown
+        assert "Cancel" not in shown
+
+
+async def test_clear_finished_keeps_running_jobs(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        place(app, State.DONE)
+        place(app, State.FAILED)
+        running = place(app, State.RUNNING)
+        app.action_clear_finished()
+        await pilot.pause()
+        assert list(app.engine.jobs) == [running.id]
+        assert app.query_one("#job-table", DataTable).row_count == 1
+
+
+async def test_late_events_do_not_revive_a_removed_row(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        job = place(app, State.DONE)
+        app._forget(job.id)
+        app.events.put(Event("state", job))
+        app._drain_events()
+        await pilot.pause()
+        assert app.query_one("#job-table", DataTable).row_count == 0
+
+
+async def test_failed_row_says_why(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        job = place(
+            app,
+            State.FAILED,
+            error="ERROR: [youtube] jNQXAC9IVRw: Private video. Sign in if you've been granted access",
+        )
+        await pilot.pause()
+        cell = app.query_one("#job-table", DataTable).get_cell(str(job.id), "progress")
+        assert str(cell) == "Private video"
+
+
+async def test_open_folder_from_a_job_opens_its_own(tmp_path, monkeypatch):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        opened = []
+        monkeypatch.setattr(app, "_open", opened.append)
+        media = tmp_path / "Channel" / "video.mp4"
+        media.parent.mkdir()
+        media.write_text("")
+        place(app, State.DONE, files=[media])
+        await pilot.pause()
+        app.query_one("#job-table", DataTable).focus()
+        await pilot.press("o")
+        assert opened == [media.parent]
+
+
+# -- review fixes ----------------------------------------------------------------
+
+
+async def test_job_keys_do_nothing_off_the_queue_tab(tmp_path):
+    """x would otherwise remove or cancel a job the user can't see."""
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        done = place(app, State.DONE)
+        await pilot.pause()
+        await pilot.press("escape", "2")
+        await pilot.pause(0.2)
+        await pilot.press("x")
+        await pilot.pause()
+        assert done.id in app.engine.jobs
+
+
+async def test_same_url_with_other_settings_is_a_new_job(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        place(app, State.RUNNING, url="https://example.com/same")
+        app.cfg.mode = "audio"
+        app.add_url("https://example.com/same")
+        assert len(app.engine.jobs) == 2
+
+
+async def test_unsaved_mark_compares_against_the_saved_file(tmp_path):
+    cfg = Config(output_dir=str(tmp_path), mode="audio")  # as if launched with --preset audio
+    async with YtkitApp(cfg, saved=Config(output_dir=str(tmp_path))).run_test() as pilot:
+        await pilot.pause()
+        tab = pilot.app.query_one("#tabs", TabbedContent).get_tab("tab-settings")
+        assert "*" in str(tab.label)
+
+
+async def test_a_bad_value_is_warned_about_once(tmp_path):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        app.action_show_tab("tab-settings")
+        field = app.query_one(f"#{widget_id('max_fps')}", Input)
+        field.focus()
+        field.value = "-"
+        await pilot.press("enter")
+        await pilot.pause()
+        app.set_focus(None)  # leaving commits again
+        await pilot.pause()
+        warnings = [n for n in app._notifications if "Max FPS" in str(n.message)]
+        assert len(warnings) == 1
+
+
+async def test_open_folder_for_a_job_without_files_uses_its_own_settings(tmp_path, monkeypatch):
+    async with app_with(tmp_path).run_test() as pilot:
+        app = pilot.app
+        opened = []
+        monkeypatch.setattr(app, "_open", opened.append)
+        job = place(app, State.FAILED)
+        job.config.output_dir = str(tmp_path / "theirs")
+        await pilot.pause()
+        app.query_one("#job-table", DataTable).focus()
+        await pilot.press("o")
+        assert opened == [tmp_path / "theirs"]
