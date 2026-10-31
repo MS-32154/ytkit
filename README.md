@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MS-32154/ytkit/actions/workflows/ci.yml/badge.svg)](https://github.com/MS-32154/ytkit/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/MS-32154/ytkit?include_prereleases&sort=semver)](https://github.com/MS-32154/ytkit/releases)
-[![Python](https://img.shields.io/badge/python-3.14%20%7C%203.15-blue)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.15-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 A terminal toolkit for pulling **video, audio, captions, transcripts and metadata**
@@ -21,7 +21,7 @@ every screen can show you the exact `yt-dlp` command it will run.
 
 ## Install
 
-Requires Python 3.14+ and [uv](https://docs.astral.sh/uv/). `ffmpeg` is needed
+Requires Python 3.15+ and [uv](https://docs.astral.sh/uv/). `ffmpeg` is needed
 for merging, audio extraction and embedding.
 
 ```bash
@@ -310,7 +310,7 @@ git commit -am "Release $(uv version --short)" && git push
 The **Release** workflow notices the new version, runs the full suite, tags
 `vX.Y.Z`, builds the wheel and sdist, and publishes a GitHub release with
 generated notes (versions with a letter in them go out as pre-releases).
-**CI** runs lint and tests on Python 3.14 and 3.15 for every push and pull
+**CI** runs lint and tests on Python 3.15 for every push and pull
 request.
 
 ## Licence
