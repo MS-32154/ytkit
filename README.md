@@ -30,7 +30,15 @@ uv sync
 uv run ytkit          # launches the TUI
 ```
 
-Or install straight from GitHub, no clone needed; add `@vX.Y.Z` to pin a
+Or install it from [PyPI](https://pypi.org/project/ytkit-tui/) (the
+package is `ytkit-tui`; the command is still `ytkit`):
+
+```bash
+uv tool install ytkit-tui       # or: pipx install ytkit-tui
+uv tool install --prerelease allow ytkit-tui   # latest build of main
+```
+
+Or straight from GitHub, no clone needed; add `@vX.Y.Z` to pin a
 [release](https://github.com/MS-32154/ytkit/releases):
 
 ```bash

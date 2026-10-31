@@ -1,18 +1,28 @@
 name: Release
 
-# Bump the version in pyproject.toml (`uv version --bump minor`) and push to
-# main. When the version has no tag yet, this runs the tests, tags it
-# vX.Y.Z, builds the wheel and sdist, and publishes a GitHub release with
-# generated notes. Run it by hand to release the current version.
+# Every push to main runs the tests and publishes to PyPI as `ytkit-tui`:
+#
+# - If the version in pyproject.toml has no tag yet (you bumped it with
+#   `uv version --bump minor` and pushed), that version is released: it goes
+#   to PyPI, gets tagged vX.Y.Z, and gets a GitHub release with generated
+#   notes. 1.2.0a1, 1.2.0rc2 and the like go out as pre-releases.
+# - Otherwise a development build of the next patch goes to PyPI, numbered by
+#   the commit count on main (0.1.1.dev42). pip and uv skip these unless asked
+#   (`--pre` / `--prerelease allow`), so a plain install still gets the release.
+#
+# Run it by hand to publish the current commit the same way.
+#
+# PyPI uploads use trusted publishing (no token): the `ytkit-tui` project on
+# PyPI trusts this repository's `release.yml` workflow in the `pypi`
+# environment.
 
 on:
   push:
     branches: [main]
-    paths: [pyproject.toml]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
@@ -22,47 +32,83 @@ jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      kind: ${{ steps.version.outputs.kind }}
       prerelease: ${{ steps.version.outputs.prerelease }}
-      new: ${{ steps.check.outputs.new }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
       - id: version
-        name: Read the version
+        name: Work out the version
         run: |
-          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          # 1.2.0a1, 1.2.0rc2 and the like go out as pre-releases.
-          if [[ "$version" =~ [a-z] ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
-      - id: check
-        name: Is it already tagged?
-        run: |
-          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
-            echo "new=false" >> "$GITHUB_OUTPUT"
-            echo "${{ steps.version.outputs.tag }} already exists; nothing to release."
+          version=$(uv version --short)
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            # Already released: this push is a dev build of the next patch.
+            version=$(uv version --bump patch --bump "dev=$(git rev-list --count HEAD)" --dry-run --short)
+            echo "kind=dev" >> "$GITHUB_OUTPUT"
           else
-            echo "new=true" >> "$GITHUB_OUTPUT"
+            echo "kind=release" >> "$GITHUB_OUTPUT"
           fi
+          if [[ "$version" =~ [a-z] ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing $version"
 
   test:
     needs: version
-    if: needs.version.outputs.new == 'true'
     uses: ./.github/workflows/ci.yml
 
-  release:
+  build:
     needs: [version, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
+      - name: Stamp the dev version
+        if: needs.version.outputs.kind == 'dev'
+        run: uv version "${{ needs.version.outputs.version }}" --frozen
       - name: Build
         run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ytkit-tui/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A re-run of a workflow that already uploaded should not fail.
+          skip-existing: true
+
+  github-release:
+    needs: [version, pypi]
+    if: needs.version.outputs.kind == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: dist
+          path: dist/
       - name: Tag and publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.version.outputs.tag }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.version.outputs.version }}
         run: |
           flags=()
           if [ "${{ needs.version.outputs.prerelease }}" = "true" ]; then flags+=(--prerelease); fi
